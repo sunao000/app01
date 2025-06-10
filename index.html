@@ -26,10 +26,12 @@
     <button id="clearPointsBtn">地点クリア</button>
     <button id="drawRouteBtn">ルート表示</button>
     <button id="openGoogleMapsBtn">Google Mapsで開く</button>
+
     <br><br>
 
     <input id="placeInput" type="text" placeholder="地名・住所を入力" style="width: 300px;" />
     <button id="searchPlaceBtn">地名検索</button>
+    <label><input type="checkbox" id="nearbyOnlyCheckbox" /> 近くの場所のみ検索</label>
     <ul id="searchResults"></ul>
 
     <br>
@@ -45,27 +47,21 @@
     <ul id="pointList"></ul>
   </div>
 
+  <div id="routeInfo" style="margin-top: 10px; font-weight: bold;"></div> <!-- ★追加：距離・時間表示欄 -->
+
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    const apiKey = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // OpenRouteServiceのAPIキーをここに入れてください
+    const apiKey = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // OpenRouteService APIキーをここに
 
-    // 地図初期化（東京駅付近）
     const map = L.map('map').setView([35.681236, 139.767125], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
     }).addTo(map);
 
-    // 登録地点・マーカー・ルート
-    let points = [];
-    let markers = [];
-    let currentRoute = null;
+    let points = [], markers = [], currentRoute = null, watchId = null;
 
-    // 現在地ウォッチID（リアルタイム更新用）
-    let watchId = null;
-
-    // 要素取得
     const latInput = document.getElementById('latInput');
     const lngInput = document.getElementById('lngInput');
     const addPointBtn = document.getElementById('addPointBtn');
@@ -79,44 +75,36 @@
     const searchResults = document.getElementById('searchResults');
     const pointList = document.getElementById('pointList');
     const openGoogleMapsBtn = document.getElementById('openGoogleMapsBtn');
+    const nearbyOnlyCheckbox = document.getElementById('nearbyOnlyCheckbox');
+    const routeInfo = document.getElementById('routeInfo'); // ★追加
 
-    // 登録地点リスト表示更新
     function refreshPointList() {
       pointList.innerHTML = '';
       points.forEach((pt, i) => {
         const li = document.createElement('li');
         li.draggable = true;
         li.dataset.index = i;
-
-        // 役割 + 地名表示
-        let roleName = '';
-        if (i === 0) roleName = '出発地: ';
-        else if (i === points.length - 1) roleName = '目的地: ';
-        else roleName = `経由地${i}: `;
+        let roleName = i === 0 ? '出発地: ' : (i === points.length - 1 ? '目的地: ' : `経由地${i}: `);
         const span = document.createElement('span');
         span.className = 'role-name';
         span.textContent = roleName + (pt.name || `手入力地点 (${pt.lat.toFixed(6)}, ${pt.lng.toFixed(6)})`);
         li.appendChild(span);
 
-        // 削除ボタン
         const delBtn = document.createElement('button');
         delBtn.textContent = '削除';
-        delBtn.style.marginLeft = '10px';
         delBtn.onclick = () => {
           map.removeLayer(markers[i]);
-          markers.splice(i, 1);
           points.splice(i, 1);
+          markers.splice(i, 1);
           refreshPointList();
           redrawRouteIfExists();
         };
         li.appendChild(delBtn);
-
         pointList.appendChild(li);
       });
       addDragAndDropHandlers();
     }
 
-    // 地点追加（名前セット可能）
     function addPoint(lat, lng, name = null) {
       points.push({ lat, lng, name });
       const marker = L.marker([lat, lng]).addTo(map);
@@ -126,28 +114,17 @@
       refreshPointList();
     }
 
-    // 緯度経度手入力追加
     addPointBtn.addEventListener('click', () => {
-      const lat = parseFloat(latInput.value);
-      const lng = parseFloat(lngInput.value);
-      if (isNaN(lat) || isNaN(lng)) {
-        alert('有効な緯度・経度を入力してください');
-        return;
-      }
+      const lat = parseFloat(latInput.value), lng = parseFloat(lngInput.value);
+      if (isNaN(lat) || isNaN(lng)) return alert('有効な緯度・経度を入力してください');
       addPoint(lat, lng, '手入力地点');
-      latInput.value = '';
-      lngInput.value = '';
+      latInput.value = ''; lngInput.value = '';
     });
 
-    // 現在地を登録地点リストに追加（ボタン反応高速化・取得中表示）
     addCurrentBtn.addEventListener('click', () => {
-      if (!navigator.geolocation) {
-        alert('現在地取得はサポートされていません');
-        return;
-      }
+      if (!navigator.geolocation) return alert('現在地取得はサポートされていません');
       addCurrentBtn.disabled = true;
       addCurrentBtn.textContent = '現在地取得中...';
-
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           addPoint(pos.coords.latitude, pos.coords.longitude, '現在地');
@@ -158,40 +135,28 @@
           alert('現在地取得に失敗しました: ' + err.message);
           addCurrentBtn.disabled = false;
           addCurrentBtn.textContent = '現在地を追加（登録地点リストへ）';
-        },
-        { enableHighAccuracy: false, timeout: 10000, maximumAge: 3000 }
+        }
       );
     });
 
-    // リアルタイム現在地更新ON/OFF切り替え
     toggleRealTimeBtn.addEventListener('click', () => {
       if (watchId === null) {
-        // ONにする
-        if (!navigator.geolocation) {
-          alert('現在地取得はサポートされていません');
-          return;
-        }
+        if (!navigator.geolocation) return alert('現在地取得はサポートされていません');
         watchId = navigator.geolocation.watchPosition(
           (pos) => {
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-            // マーカーがあれば更新、なければ追加
+            const { latitude: lat, longitude: lng } = pos.coords;
             if (window.realTimeMarker) {
               window.realTimeMarker.setLatLng([lat, lng]);
             } else {
-              window.realTimeMarker = L.marker([lat, lng], {icon: L.icon({iconUrl:'https://unpkg.com/leaflet@1.9.3/dist/images/marker-icon.png', iconAnchor:[12,41]})}).addTo(map);
-              window.realTimeMarker.bindPopup('リアルタイム現在地').openPopup();
+              window.realTimeMarker = L.marker([lat, lng]).addTo(map).bindPopup('リアルタイム現在地').openPopup();
             }
             map.setView([lat, lng], 14);
           },
-          (err) => {
-            alert('リアルタイム位置取得に失敗しました: ' + err.message);
-          },
+          (err) => alert('リアルタイム位置取得に失敗しました: ' + err.message),
           { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
         );
         toggleRealTimeBtn.textContent = 'リアルタイム現在地更新 ON';
       } else {
-        // OFFにする
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
         if (window.realTimeMarker) {
@@ -202,7 +167,6 @@
       }
     });
 
-    // クリア
     clearPointsBtn.addEventListener('click', () => {
       points = [];
       markers.forEach(m => map.removeLayer(m));
@@ -211,163 +175,133 @@
         map.removeLayer(currentRoute);
         currentRoute = null;
       }
+      routeInfo.textContent = ''; // ★追加：ルート情報のクリア
       refreshPointList();
     });
 
     function redrawRouteIfExists() {
-      if (currentRoute) {
-        drawRouteBtn.click();
-      }
+      if (currentRoute) drawRouteBtn.click();
     }
 
-    // ルート表示処理
     drawRouteBtn.addEventListener('click', () => {
-      if (points.length < 2) {
-        alert('出発地と目的地を含む2地点以上を登録してください');
-        return;
-      }
-      // 出発地・経由地・目的地の座標配列作成
-      const coords = points.map(p => [p.lng, p.lat]); // OpenRouteServiceは[lng, lat]
+      if (points.length < 2) return alert('出発地と目的地を含む2地点以上を登録してください');
+      const coords = points.map(p => [p.lng, p.lat]);
       const profile = profileSelect.value;
 
-      fetch('https://api.openrouteservice.org/v2/directions/' + profile + '/geojson', {
+      fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': apiKey,
-        },
-        body: JSON.stringify({
-          coordinates: coords,
-          instructions: true,
-          elevation: false,
-          optimize_waypoints: false,
-        }),
+        headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+        body: JSON.stringify({ coordinates: coords })
       })
         .then(res => res.json())
         .then(data => {
-          if (currentRoute) {
-            map.removeLayer(currentRoute);
-          }
+          if (currentRoute) map.removeLayer(currentRoute);
           currentRoute = L.geoJSON(data, { style: { color: 'blue', weight: 5 } }).addTo(map);
-          // 地図範囲調整
           map.fitBounds(currentRoute.getBounds());
+
+          // ★追加：距離・時間の表示
+          const summary = data.features[0].properties.summary;
+          const distanceKm = (summary.distance / 1000).toFixed(2);
+          const durationMin = (summary.duration / 60).toFixed(1);
+          routeInfo.textContent = `距離: ${distanceKm} km　所要時間: 約 ${durationMin} 分`;
         })
-        .catch(err => {
-          alert('ルート取得エラー: ' + err.message);
-        });
+        .catch(err => alert('ルート取得エラー: ' + err.message));
     });
 
-    // Google Mapsでルートを開く
     openGoogleMapsBtn.addEventListener('click', () => {
-      if (points.length < 2) {
-        alert('出発地と目的地を含む2地点以上を登録してください');
-        return;
-      }
+      if (points.length < 2) return alert('出発地と目的地を含む2地点以上を登録してください');
       const baseUrl = 'https://www.google.com/maps/dir/?api=1';
       const origin = points[0].lat + ',' + points[0].lng;
       const destination = points[points.length - 1].lat + ',' + points[points.length - 1].lng;
       const waypoints = points.slice(1, -1).map(p => p.lat + ',' + p.lng).join('|');
       let url = `${baseUrl}&origin=${origin}&destination=${destination}`;
-      if (waypoints.length > 0) {
-        url += `&waypoints=${waypoints}`;
-      }
+      if (waypoints.length > 0) url += `&waypoints=${waypoints}`;
       window.open(url, '_blank');
     });
 
-    // 地名検索（Nominatim利用）
     searchPlaceBtn.addEventListener('click', () => {
       const query = placeInput.value.trim();
-      if (!query) {
-        alert('検索語を入力してください');
-        return;
-      }
+      if (!query) return alert('検索語を入力してください');
       searchResults.innerHTML = '検索中...';
-      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=10&addressdetails=1`)
+      let url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=10&addressdetails=1`;
+
+      if (nearbyOnlyCheckbox.checked && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          const lat = parseFloat(pos.coords.latitude);
+          const lon = parseFloat(pos.coords.longitude);
+          const delta = 0.05;
+          url += `&viewbox=${lon - delta},${lat + delta},${lon + delta},${lat - delta}&bounded=1`;
+          fetchNearbyPlaces(url);
+        }, () => {
+          searchResults.textContent = '現在地が取得できず、近くの場所検索はできませんでした';
+        });
+      } else {
+        fetchNearbyPlaces(url);
+      }
+    });
+
+    function fetchNearbyPlaces(url) {
+      fetch(url)
         .then(res => res.json())
         .then(data => {
           searchResults.innerHTML = '';
-          if (data.length === 0) {
-            searchResults.textContent = '該当する場所がありません';
-            return;
-          }
+          if (data.length === 0) return searchResults.textContent = '該当する場所がありません';
           data.forEach(place => {
             const li = document.createElement('li');
             li.textContent = place.display_name;
-            li.style.cursor = 'pointer';
             li.onclick = () => {
-              latInput.value = place.lat;
-              lngInput.value = place.lon;
+              const lat = parseFloat(place.lat);
+              const lng = parseFloat(place.lon);
+              addPoint(lat, lng, place.display_name);
+              latInput.value = lat;
+              lngInput.value = lng;
               placeInput.value = place.display_name;
               searchResults.innerHTML = '';
-              map.setView([place.lat, place.lon], 14);
+              map.setView([lat, lng], 14);
             };
             searchResults.appendChild(li);
           });
         })
-        .catch(err => {
-          searchResults.textContent = '検索エラー: ' + err.message;
-        });
-    });
-
-    // ドラッグで並び替え（シンプルな実装）
-    function addDragAndDropHandlers() {
-      let dragSrcEl = null;
-
-      function handleDragStart(e) {
-        dragSrcEl = this;
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/html', this.innerHTML);
-        this.style.opacity = '0.4';
-      }
-      function handleDragOver(e) {
-        if (e.preventDefault) e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        return false;
-      }
-      function handleDragEnter() {
-        this.classList.add('over');
-      }
-      function handleDragLeave() {
-        this.classList.remove('over');
-      }
-      function handleDrop(e) {
-        if (e.stopPropagation) e.stopPropagation();
-        if (dragSrcEl !== this) {
-          // 入れ替え
-          const fromIndex = parseInt(dragSrcEl.dataset.index);
-          const toIndex = parseInt(this.dataset.index);
-
-          // 配列入れ替え
-          const tempPoint = points[fromIndex];
-          points.splice(fromIndex, 1);
-          points.splice(toIndex, 0, tempPoint);
-
-          // マーカー入れ替え
-          const tempMarker = markers[fromIndex];
-          markers.splice(fromIndex, 1);
-          markers.splice(toIndex, 0, tempMarker);
-
-          refreshPointList();
-          redrawRouteIfExists();
-        }
-        return false;
-      }
-      function handleDragEnd() {
-        this.style.opacity = '1';
-        pointList.querySelectorAll('li').forEach(li => li.classList.remove('over'));
-      }
-
-      const items = pointList.querySelectorAll('li');
-      items.forEach(function(item) {
-        item.addEventListener('dragstart', handleDragStart);
-        item.addEventListener('dragenter', handleDragEnter);
-        item.addEventListener('dragover', handleDragOver);
-        item.addEventListener('dragleave', handleDragLeave);
-        item.addEventListener('drop', handleDrop);
-        item.addEventListener('dragend', handleDragEnd);
-      });
+        .catch(err => searchResults.textContent = '検索エラー: ' + err.message);
     }
 
+    function addDragAndDropHandlers() {
+      let dragSrcEl = null;
+      const items = pointList.querySelectorAll('li');
+
+      items.forEach(item => {
+        item.addEventListener('dragstart', function(e) {
+          dragSrcEl = this;
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/html', this.innerHTML);
+          this.style.opacity = '0.4';
+        });
+
+        item.addEventListener('dragover', function(e) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          return false;
+        });
+
+        item.addEventListener('drop', function(e) {
+          if (dragSrcEl !== this) {
+            const fromIndex = parseInt(dragSrcEl.dataset.index);
+            const toIndex = parseInt(this.dataset.index);
+            const [movedPoint] = points.splice(fromIndex, 1);
+            points.splice(toIndex, 0, movedPoint);
+            const [movedMarker] = markers.splice(fromIndex, 1);
+            markers.splice(toIndex, 0, movedMarker);
+            refreshPointList();
+            redrawRouteIfExists();
+          }
+          return false;
+        });
+
+        item.addEventListener('dragend', function() {
+          this.style.opacity = '1';
+        });
+      });
+    }
   </script>
 </body>
 </html>
