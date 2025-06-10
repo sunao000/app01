@@ -12,6 +12,7 @@
     #pointList { list-style: none; padding-left: 0; }
     #pointList li { padding: 4px; border: 1px solid #ccc; margin-bottom: 4px; background: #fafafa; cursor: move; display: flex; justify-content: space-between; align-items: center; }
     #pointList li span.role-name { flex-grow: 1; }
+    #clearPlaceInputBtn { margin-left: 4px; }
   </style>
 </head>
 <body>
@@ -30,6 +31,7 @@
     <br><br>
 
     <input id="placeInput" type="text" placeholder="地名・住所を入力" style="width: 300px;" />
+    <button id="clearPlaceInputBtn">×</button> <!-- ★追加 -->
     <button id="searchPlaceBtn">地名検索</button>
     <label><input type="checkbox" id="nearbyOnlyCheckbox" /> 近くの場所のみ検索</label>
     <ul id="searchResults"></ul>
@@ -47,8 +49,7 @@
     <ul id="pointList"></ul>
   </div>
 
-  <div id="routeInfo" style="margin-top: 10px; font-weight: bold;"></div> <!-- ★追加：距離・時間表示欄 -->
-
+  <div id="routeInfo" style="margin-top: 10px; font-weight: bold;"></div>
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -71,12 +72,19 @@
     const drawRouteBtn = document.getElementById('drawRouteBtn');
     const profileSelect = document.getElementById('profileSelect');
     const placeInput = document.getElementById('placeInput');
+    const clearPlaceInputBtn = document.getElementById('clearPlaceInputBtn'); // ★追加
     const searchPlaceBtn = document.getElementById('searchPlaceBtn');
     const searchResults = document.getElementById('searchResults');
     const pointList = document.getElementById('pointList');
     const openGoogleMapsBtn = document.getElementById('openGoogleMapsBtn');
     const nearbyOnlyCheckbox = document.getElementById('nearbyOnlyCheckbox');
-    const routeInfo = document.getElementById('routeInfo'); // ★追加
+    const routeInfo = document.getElementById('routeInfo');
+
+    // ★クリアボタンの機能追加
+    clearPlaceInputBtn.addEventListener('click', () => {
+      placeInput.value = '';
+      placeInput.focus();
+    });
 
     function refreshPointList() {
       pointList.innerHTML = '';
@@ -175,7 +183,7 @@
         map.removeLayer(currentRoute);
         currentRoute = null;
       }
-      routeInfo.textContent = ''; // ★追加：ルート情報のクリア
+      routeInfo.textContent = '';
       refreshPointList();
     });
 
@@ -199,7 +207,6 @@
           currentRoute = L.geoJSON(data, { style: { color: 'blue', weight: 5 } }).addTo(map);
           map.fitBounds(currentRoute.getBounds());
 
-          // ★追加：距離・時間の表示
           const summary = data.features[0].properties.summary;
           const distanceKm = (summary.distance / 1000).toFixed(2);
           const durationMin = (summary.duration / 60).toFixed(1);
