@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>ルート案内アプリ</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     #map { height: 500px; }
     #controls { margin: 10px 0; }
@@ -26,6 +27,7 @@
     <button id="toggleRealTimeBtn">リアルタイム現在地更新 OFF</button>
     <button id="drawRouteBtn">ルート表示</button>
     <button id="downloadCsvBtn">スコアCSVをダウンロード</button>
+    <button id="downloadGraphBtn">距離分布グラフをダウンロード</button>
     <select id="profileSelect">
       <option value="foot-walking">徒歩</option>
       <option value="driving-car" selected>車</option>
@@ -38,6 +40,7 @@
   <ul id="pointList"></ul>
   <ul id="searchResults"></ul>
   <div id="map"></div>
+  <canvas id="distanceChart" style="display:none;"></canvas>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/sortablejs@latest/Sortable.min.js"></script>
@@ -184,15 +187,51 @@
         csv += `${from},${to},${(d / 1000).toFixed(2)},${(avg / 1000).toFixed(2)},${(mse / 1_000_000).toFixed(4)}\n`;
       });
 
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 10);
+      const filename = `ルートスコア結果_${dateStr}.csv`;
+
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'route_score.csv';
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    }
+
+    function downloadGraph() {
+      if (!window.distanceChart) return alert("グラフがまだ表示されていません");
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 10);
+      const filename = `距離分布グラフ_${dateStr}.png`;
+      const link = document.createElement('a');
+      link.href = distanceChart.toBase64Image();
+      link.download = filename;
+      link.click();
+    }
+
+    function showDistanceChart() {
+      const ctx = document.getElementById('distanceChart').getContext('2d');
+      document.getElementById('distanceChart').style.display = 'block';
+      if (window.distanceChart) window.distanceChart.destroy();
+      window.distanceChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: routeLabels.map((label, i) => `区間${i + 1} (${extractPlaceName(label[0])}→${extractPlaceName(label[1])})`),
+          datasets: [{
+            label: '区間距離 (km)',
+            data: routeDistances.map(d => (d / 1000).toFixed(2))
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { title: { display: true, text: '距離 (km)' } } }
+        }
+      });
     }
 
 
@@ -279,7 +318,8 @@
     });
 
     drawRouteBtn.addEventListener('click', drawRoute);
-    downloadCsvBtn.addEventListener('click', downloadCsv);
+    document.getElementById('downloadCsvBtn').addEventListener('click', downloadCsv);
+    document.getElementById('downloadGraphBtn').addEventListener('click', downloadGraph);
   </script>
 </body>
 </html>
