@@ -173,9 +173,11 @@
       const avg = routeDistances.reduce((a, b) => a + b, 0) / routeDistances.length;
       const mse = routeDistances.reduce((sum, d) => sum + Math.pow(d - avg, 2), 0) / routeDistances.length;
 
-      let csv = '\uFEFF出発地,目的地,区間距離(km),平均距離(km),MSE(km²)\n'; // UTF-8 BOMを文字列として埋め込む
+      let csv = '\uFEFF出発地,目的地,区間距離(km),平均距離(km),MSE(km²)\n';
       routeDistances.forEach((d, i) => {
-        csv += `${routeLabels[i][0]},${routeLabels[i][1]},${(d / 1000).toFixed(2)},${(avg / 1000).toFixed(2)},${(mse / 1_000_000).toFixed(4)}\n`;
+        const from = extractSimpleName(routeLabels[i][0]);
+        const to = extractSimpleName(routeLabels[i][1]);
+        csv += `${from},${to},${(d / 1000).toFixed(2)},${(avg / 1000).toFixed(2)},${(mse / 1_000_000).toFixed(4)}\n`;
       });
 
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
