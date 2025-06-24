@@ -144,15 +144,18 @@
   const coordinates = points.map(p => [p.lng, p.lat]);
   const profile = profileSelect.value;
 
-  fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
+  fetch(`https://api.openrouteservice.org/v2/directions/${profile}/json`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': apiKey
     },
     body: JSON.stringify({
-      coordinates,
-      options: { alternatives: true }
+      coordinates: coordinates,
+      instructions: false,
+      options: {
+        alternatives: true
+      }
     })
   })
   .then(res => {
@@ -160,30 +163,32 @@
     return res.json();
   })
   .then(data => {
-    if (!data || !data.features || !Array.isArray(data.features)) {
-      throw new Error('APIからのレスポンスが不正です');
+    if (!data.routes || data.routes.length === 0) {
+      throw new Error('ルートが見つかりませんでした');
     }
 
-    // 古いルート削除
+    // 既存ルート削除
     if (currentRoute) {
       (Array.isArray(currentRoute) ? currentRoute : [currentRoute]).forEach(r => map.removeLayer(r));
     }
 
     const routeLayers = [];
-    data.features.forEach((feature, index) => {
+    data.routes.forEach((route, index) => {
       const color = ['blue', 'green', 'purple'][index % 3];
-      const layer = L.geoJSON(feature, { style: { color, weight: 5 } }).addTo(map);
+      const geojson = {
+        type: "Feature",
+        geometry: route.geometry,
+        properties: {}
+      };
+      const layer = L.geoJSON(geojson, { style: { color, weight: 5 } }).addTo(map);
       routeLayers.push(layer);
 
-      if (index === 0) {
-        map.fitBounds(layer.getBounds());
-      }
+      if (index === 0) map.fitBounds(layer.getBounds());
     });
 
     currentRoute = routeLayers;
 
-    // 最短ルート情報表示（最初のルート）
-    const summary = data.features[0].properties.summary;
+    const summary = data.routes[0].summary;
     routeInfo.innerHTML = `※最短ルート<br>距離: ${(summary.distance / 1000).toFixed(2)} km<br>所要時間: ${(summary.duration / 60).toFixed(1)} 分`;
   })
   .catch(err => {
@@ -191,6 +196,7 @@
     alert('ルート取得エラー: ' + err.message);
   });
 }
+
 
 
 
