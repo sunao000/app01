@@ -144,17 +144,14 @@
   const coordinates = points.map(p => [p.lng, p.lat]);
   const profile = profileSelect.value;
 
-  fetch(`https://api.openrouteservice.org/v2/directions/${profile}/json`, {
+  fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': apiKey
     },
     body: JSON.stringify({
-      coordinates: coordinates,
-      options: { alternatives: true },
-      geometry_format: "geojson",
-      instructions: false
+      coordinates: coordinates
     })
   })
   .then(res => {
@@ -162,40 +159,26 @@
     return res.json();
   })
   .then(data => {
-    if (!data.routes || !Array.isArray(data.routes)) {
+    if (!data || !data.features || !data.features.length) {
       throw new Error('ルート情報が取得できませんでした');
     }
 
-    // 既存ルート削除
     if (currentRoute) {
-      (Array.isArray(currentRoute) ? currentRoute : [currentRoute]).forEach(r => map.removeLayer(r));
+      map.removeLayer(currentRoute);
     }
 
-    const routeLayers = [];
-    data.routes.forEach((route, index) => {
-      const color = ['blue', 'green', 'purple'][index % 3];
-      const geojson = {
-        type: "Feature",
-        geometry: route.geometry,
-        properties: {}
-      };
-      const layer = L.geoJSON(geojson, { style: { color, weight: 4, opacity: 0.8 } }).addTo(map);
-      routeLayers.push(layer);
+    currentRoute = L.geoJSON(data, { style: { color: 'blue', weight: 5 } }).addTo(map);
+    map.fitBounds(currentRoute.getBounds());
 
-      if (index === 0) map.fitBounds(layer.getBounds());
-    });
-
-    currentRoute = routeLayers;
-
-    // 最短ルートの情報だけ表示
-    const summary = data.routes[0].summary;
-    routeInfo.innerHTML = `※最短ルート<br>距離: ${(summary.distance / 1000).toFixed(2)} km<br>所要時間: ${(summary.duration / 60).toFixed(1)} 分`;
+    const summary = data.features[0].properties.summary;
+    routeInfo.innerHTML = `距離: ${(summary.distance / 1000).toFixed(2)} km<br>所要時間: ${(summary.duration / 60).toFixed(1)} 分`;
   })
   .catch(err => {
     console.error(err);
     alert('ルート取得エラー: ' + err.message);
   });
 }
+
 
 
 
