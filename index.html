@@ -168,44 +168,24 @@
       .catch(err => alert('ルート取得エラー: ' + err.message));
     }
 
-    let routeDistances = [], routeLabels = [];
-
-    function extractSimpleName(displayName) {
-      return displayName ? displayName.split(',')[0].trim() : '';
-    }
-
     function downloadCsv() {
-      if (!routeDistances.length || !routeLabels.length) return alert('ルートが表示されていません');
-
+      if (!routeDistances.length) return alert('ルートが表示されていません');
       const avg = routeDistances.reduce((a, b) => a + b, 0) / routeDistances.length;
       const mse = routeDistances.reduce((sum, d) => sum + Math.pow(d - avg, 2), 0) / routeDistances.length;
 
-      let rows = [
-        ['出発地', '目的地', '区間距離(km)', '平均距離(km)', 'MSE(km²)']
-      ];
-
+      let csv = '\uFEFF出発地,目的地,区間距離(km),平均距離(km),MSE(km²)\n'; // UTF-8 BOMを文字列として埋め込む
       routeDistances.forEach((d, i) => {
-        const from = extractSimpleName(routeLabels[i][0]);
-        const to = extractSimpleName(routeLabels[i][1]);
-        rows.push([
-          from,
-          to,
-          (d / 1000).toFixed(2),
-          (avg / 1000).toFixed(2),
-          (mse / 1_000_000).toFixed(4)
-        ]);
+        csv += `${routeLabels[i][0]},${routeLabels[i][1]},${(d / 1000).toFixed(2)},${(avg / 1000).toFixed(2)},${(mse / 1_000_000).toFixed(4)}\n`;
       });
 
-      const csvContent = '\uFEFF' + rows.map(r => r.join(',')).join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
-
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'route_score.csv';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'route_score.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }
 
