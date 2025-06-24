@@ -169,23 +169,27 @@
     }
 
     function downloadCsv() {
-      if (!routeDistances.length) return alert('ルートが表示されていません');
-      const avg = routeDistances.reduce((a, b) => a + b, 0) / routeDistances.length;
-      const mse = routeDistances.reduce((sum, d) => sum + Math.pow(d - avg, 2), 0) / routeDistances.length;
-      let csv = '出発地,目的地,区間距離(km),平均距離(km),MSE(km²)\n';
-      routeDistances.forEach((d, i) => {
-        csv += `${routeLabels[i][0]},${routeLabels[i][1]},${(d / 1000).toFixed(2)},${(avg / 1000).toFixed(2)},${(mse / 1_000_000).toFixed(4)}\n`;
-      });
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'route_score.csv';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
+  if (!routeDistances.length) return alert('ルートが表示されていません');
+  const avg = routeDistances.reduce((a, b) => a + b, 0) / routeDistances.length;
+  const mse = routeDistances.reduce((sum, d) => sum + Math.pow(d - avg, 2), 0) / routeDistances.length;
+
+  let csv = '出発地,目的地,区間距離(km),平均距離(km),MSE(km²)\n';
+  routeDistances.forEach((d, i) => {
+    csv += `${routeLabels[i][0]},${routeLabels[i][1]},${(d / 1000).toFixed(2)},${(avg / 1000).toFixed(2)},${(mse / 1_000_000).toFixed(4)}\n`;
+  });
+
+  const bom = new Uint8Array([0xEF, 0xBB, 0xBF]); // BOMを追加
+  const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'route_score.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 
     function fetchNearbyPlaces(query) {
       let url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=10&addressdetails=1`;
