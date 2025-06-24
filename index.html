@@ -139,24 +139,50 @@
     }
 
     function drawRoute() {
-      if (points.length < 2) return alert('出発地と目的地を含む2地点以上を登録してください');
-      const coordinates = points.map(p => [p.lng, p.lat]);
-      const profile = profileSelect.value;
-      fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
-        body: JSON.stringify({ coordinates })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (currentRoute) map.removeLayer(currentRoute);
-        currentRoute = L.geoJSON(data, { style: { color: 'blue', weight: 5 } }).addTo(map);
-        map.fitBounds(currentRoute.getBounds());
-        const summary = data.features[0].properties.summary;
-        routeInfo.innerHTML = `距離: ${(summary.distance / 1000).toFixed(2)} km<br>所要時間: ${(summary.duration / 60).toFixed(1)} 分`;
-      })
-      .catch(err => alert('ルート取得エラー: ' + err.message));
+  if (points.length < 2) return alert('出発地と目的地を含む2地点以上を登録してください');
+
+  const coordinates = points.map(p => [p.lng, p.lat]);
+  const profile = profileSelect.value;
+
+  fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+    body: JSON.stringify({
+      coordinates,
+      options: { alternatives: true }
+    })
+  })
+  .then(res => res.json())
+  .then(data => {
+    // 古いルートをすべて削除
+    if (currentRoute) {
+      if (Array.isArray(currentRoute)) {
+        currentRoute.forEach(r => map.removeLayer(r));
+      } else {
+        map.removeLayer(currentRoute);
+      }
     }
+
+    const routeLayers = [];
+    data.features.forEach((feature, index) => {
+      const color = ['blue', 'green', 'purple'][index % 3]; // 複数ルートを色分け
+      const layer = L.geoJSON(feature, { style: { color, weight: 5 } }).addTo(map);
+      routeLayers.push(layer);
+
+      if (index === 0) {
+        map.fitBounds(layer.getBounds()); // 最初のルートで地図合わせ
+      }
+    });
+
+    currentRoute = routeLayers;
+
+    // 最短ルート（最初のルート）の情報表示
+    const summary = data.features[0].properties.summary;
+    routeInfo.innerHTML = `※最短ルート<br>距離: ${(summary.distance / 1000).toFixed(2)} km<br>所要時間: ${(summary.duration / 60).toFixed(1)} 分`;
+  })
+  .catch(err => alert('ルート取得エラー: ' + err.message));
+}
+
 
     function fetchNearbyPlaces(query) {
       let url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=10&addressdetails=1`;
