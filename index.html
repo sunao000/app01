@@ -14,6 +14,7 @@
     #pointList li { padding: 4px; border: 1px solid #ccc; margin-bottom: 4px; background: #fafafa; cursor: move; display: flex; justify-content: space-between; align-items: center; }
     #pointList li span.role-name { flex-grow: 1; }
     #clearPlaceInputBtn { margin-left: 4px; }
+    #distanceChartContainer { display: none; margin-top: 20px; }
   </style>
 </head>
 <body>
@@ -40,7 +41,9 @@
   <ul id="pointList"></ul>
   <ul id="searchResults"></ul>
   <div id="map"></div>
-  <canvas id="distanceChart" style="display:none;"></canvas>
+  <div id="distanceChartContainer">
+    <canvas id="distanceChart"></canvas>
+  </div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/sortablejs@latest/Sortable.min.js"></script>
@@ -203,19 +206,22 @@
     }
 
     function downloadGraph() {
-      if (!window.distanceChart) return alert("グラフがまだ表示されていません");
+      const chartCanvas = document.getElementById('distanceChart');
+      if (!chartCanvas || !window.distanceChart) return alert("グラフがまだ表示されていません");
       const now = new Date();
       const dateStr = now.toISOString().slice(0, 10);
       const filename = `距離分布グラフ_${dateStr}.png`;
       const link = document.createElement('a');
-      link.href = distanceChart.toBase64Image();
+      link.href = chartCanvas.toDataURL("image/png");
       link.download = filename;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
     }
 
     function showDistanceChart() {
       const ctx = document.getElementById('distanceChart').getContext('2d');
-      document.getElementById('distanceChart').style.display = 'block';
+      document.getElementById('distanceChartContainer').style.display = 'block';
       if (window.distanceChart) window.distanceChart.destroy();
       window.distanceChart = new Chart(ctx, {
         type: 'bar',
@@ -223,12 +229,13 @@
           labels: routeLabels.map((label, i) => `区間${i + 1} (${extractPlaceName(label[0])}→${extractPlaceName(label[1])})`),
           datasets: [{
             label: '区間距離 (km)',
-            data: routeDistances.map(d => (d / 1000).toFixed(2))
+            data: routeDistances.map(d => (d / 1000).toFixed(2)),
+            backgroundColor: 'rgba(75, 192, 192, 0.6)'
           }]
         },
         options: {
           responsive: true,
-          plugins: { legend: { display: false } },
+          plugins: { legend: { display: true } },
           scales: { y: { title: { display: true, text: '距離 (km)' } } }
         }
       });
