@@ -146,42 +146,52 @@
 
   fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': apiKey },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': apiKey
+    },
     body: JSON.stringify({
       coordinates,
       options: { alternatives: true }
     })
   })
-  .then(res => res.json())
+  .then(res => {
+    if (!res.ok) throw new Error(`HTTPエラー: ${res.status}`);
+    return res.json();
+  })
   .then(data => {
-    // 古いルートをすべて削除
+    if (!data || !data.features || !Array.isArray(data.features)) {
+      throw new Error('APIからのレスポンスが不正です');
+    }
+
+    // 古いルート削除
     if (currentRoute) {
-      if (Array.isArray(currentRoute)) {
-        currentRoute.forEach(r => map.removeLayer(r));
-      } else {
-        map.removeLayer(currentRoute);
-      }
+      (Array.isArray(currentRoute) ? currentRoute : [currentRoute]).forEach(r => map.removeLayer(r));
     }
 
     const routeLayers = [];
     data.features.forEach((feature, index) => {
-      const color = ['blue', 'green', 'purple'][index % 3]; // 複数ルートを色分け
+      const color = ['blue', 'green', 'purple'][index % 3];
       const layer = L.geoJSON(feature, { style: { color, weight: 5 } }).addTo(map);
       routeLayers.push(layer);
 
       if (index === 0) {
-        map.fitBounds(layer.getBounds()); // 最初のルートで地図合わせ
+        map.fitBounds(layer.getBounds());
       }
     });
 
     currentRoute = routeLayers;
 
-    // 最短ルート（最初のルート）の情報表示
+    // 最短ルート情報表示（最初のルート）
     const summary = data.features[0].properties.summary;
     routeInfo.innerHTML = `※最短ルート<br>距離: ${(summary.distance / 1000).toFixed(2)} km<br>所要時間: ${(summary.duration / 60).toFixed(1)} 分`;
   })
-  .catch(err => alert('ルート取得エラー: ' + err.message));
+  .catch(err => {
+    console.error(err);
+    alert('ルート取得エラー: ' + err.message);
+  });
 }
+
 
 
     function fetchNearbyPlaces(query) {
