@@ -170,7 +170,7 @@
         }
         const avg = routeDistances.reduce((a, b) => a + b, 0) / routeDistances.length;
         const mse = routeDistances.reduce((sum, d) => sum + Math.pow(d - avg, 2), 0) / routeDistances.length;
-        routeInfo.innerHTML += `<br>平均距離: ${(avg / 1000).toFixed(2)} km<br>ばらつきスコア(MSE): ${(mse / 1_000_000).toFixed(4)} km²`;
+        routeInfo.innerHTML += `<br>平均距離: ${(avg / 1000).toFixed(2)} km<br>ばらつきスコア(MSE): ${(mse / 1_000_000).toFixed(4)} `;
       })
       .catch(err => alert('ルート取得エラー: ' + err.message));
     }
@@ -184,7 +184,7 @@
       const avg = routeDistances.reduce((a, b) => a + b, 0) / routeDistances.length;
       const mse = routeDistances.reduce((sum, d) => sum + Math.pow(d - avg, 2), 0) / routeDistances.length;
 
-      let csv = '\uFEFF出発地,目的地,区間距離(km),平均距離(km),MSE(km²)\n';
+      let csv = '\uFEFF出発地,目的地,区間距離(km),平均距離(km),MSE\n';
       routeDistances.forEach((d, i) => {
         const from = extractPlaceName(routeLabels[i][0]);
         const to = extractPlaceName(routeLabels[i][1]);
