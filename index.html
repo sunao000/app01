@@ -272,18 +272,29 @@
       }
 
       // 休憩追加後のpoints配列でルート探索
-      const newCoords = points.map(p=>[p.lng,p.lat]);
-      const body = {
-        coordinates: newCoords,
-        alternative_routes: {share_factor: 0.6, target_count: 3},
-        extra_info: ["steepness"]
-      };
-      routeInfo.innerHTML = "ルート計算中…";
-      const res=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':apiKey},
-        body:JSON.stringify(body)
-      });
+const newCoords = points.map(p=>[p.lng,p.lat]);
+let body;
+if(points.length === 2){
+  // 出発地＋目的地だけなら、代替ルート付き
+  body = {
+    coordinates: newCoords,
+    alternative_routes: {share_factor: 0.6, target_count: 3},
+    extra_info: ["steepness"]
+  };
+} else {
+  // 3点以上なら通常ルートのみ
+  body = {
+    coordinates: newCoords,
+    extra_info: ["steepness"]
+  };
+}
+routeInfo.innerHTML = "ルート計算中…";
+const res=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
+  method:'POST',
+  headers:{'Content-Type':'application/json','Authorization':apiKey},
+  body:JSON.stringify(body)
+});
+
       if(!res.ok){
         const text = await res.text();
         alert('ルート取得エラー: '+res.status+'\n'+text);
