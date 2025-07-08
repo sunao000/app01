@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>坂ルート案内アプリ（完全版）</title>
+  <title>坂ルート案内アプリ（時間休憩版）</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
@@ -22,7 +22,7 @@
   </style>
 </head>
 <body style="background-color: white;">
-  <h2>坂ルート案内アプリ（完全版）</h2>
+  <h2>坂ルート案内アプリ（時間休憩版）</h2>
   <div id="controls">
     <input id="placeInput" type="text" placeholder="地名・住所を入力" style="width: 240px;" />
     <button id="clearPlaceInputBtn">×</button>
@@ -33,7 +33,7 @@
     <button id="drawRouteBtn">坂ルート表示</button>
     <label style="display:flex; align-items:center; gap:4px;">
       <input type="checkbox" id="restCheckbox" />
-      <input type="number" id="restDistanceInput" value="10" min="1" style="width:60px;" disabled /> kmで休憩 (コンビニ/スーパー/道の駅)
+      <input type="number" id="restTimeInput" value="60" min="1" style="width:60px;" disabled /> 分ごとに休憩 (コンビニ/スーパー/道の駅)
     </label>
     <button id="downloadCsvBtn">スコアCSVダウンロード</button>
     <button id="downloadGraphBtn">距離グラフダウンロード</button>
@@ -62,7 +62,7 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/sortablejs@latest/Sortable.min.js"></script>
   <script>
-    const apiKey = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // ← OpenRouteService APIキーをここに
+    const apiKey = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // OpenRouteService APIキー（必須！）
     const AUTO_REDRAW_DISTANCE = 50;
     const POI_SEARCH_RADIUS = 1000;
     const REST_POI_CATEGORIES = [533, 532, 414];
@@ -80,13 +80,13 @@
     const nearBox = $('nearbyOnlyCheckbox');
     const searchResults = $('searchResults');
     const restCheckbox = $('restCheckbox');
-    const restDistanceInput = $('restDistanceInput');
+    const restTimeInput = $('restTimeInput');
     const pointList = $('pointList');
     const routeInfo = $('routeInfo');
     const progressStatus = $('progressStatus');
     const profileSelect = $('profileSelect');
 
-    restCheckbox.addEventListener('change',()=>{restDistanceInput.disabled=!restCheckbox.checked;});
+    restCheckbox.addEventListener('change',()=>{restTimeInput.disabled=!restCheckbox.checked;});
 
     let points=[], markers=[], restMarkers=[], routeLayers=[], currentRoute=null;
     let routeDistances=[], routeLabels=[];
@@ -101,33 +101,39 @@
     };
     const clearLayers = arr => { arr.forEach(m=>map.removeLayer(m)); arr.length=0; };
 
-    // === 休憩地点自動挿入 ===
-    async function insertRestStops(coords){
-      const interval = Number(restDistanceInput.value||10)*1000;
-      if(!interval) return 0;
-      let acc=0,target=interval,newStops=[];
-      let restIndex=1;
-      for(let i=1;i<coords.length;i++){
-        const [lon1,lat1]=coords[i-1], [lon2,lat2]=coords[i];
-        const seg=haversine(lat1,lon1,lat2,lon2);
-        while(acc+seg>=target){
-          const ratio=(target-acc)/seg;
-          const tLat=lat1+(lat2-lat1)*ratio, tLon=lon1+(lon2-lon1)*ratio;
-          newStops.push({tLat,tLon});
-          target+=interval; restIndex++;
+    // === 休憩地点自動挿入（時間ごと） ===
+    async function insertRestStopsByTime(feature){
+      const restInterval = Number(restTimeInput.value || 60) * 60; // 秒
+      const coords = feature.geometry.coordinates;
+      const times = feature.properties.segments[0].steps.map(step=>step.duration);
+      if (!restInterval || !coords.length || !times.length) return 0;
+
+      let timeAcc = 0, target = restInterval, newStops = [], restIndex = 1, stepIdx = 0, coordIdx = 0, totalTime = 0;
+      // 各ステップで積算
+      for(let i=1; i<coords.length; i++){
+        let stepTime = 0;
+        // stepsは区間のまとまり、coordsは点列なのでルートによって分布が違う
+        if(stepIdx < times.length) {
+          stepTime = times[stepIdx];
         }
-        acc+=seg;
+        totalTime += stepTime;
+        timeAcc += stepTime;
+        while(timeAcc >= target){
+          // 割合から挿入地点算出
+          const tLat = coords[i][1], tLon = coords[i][0];
+          newStops.push({tLat, tLon, restIndex});
+          target += restInterval; restIndex++;
+        }
+        stepIdx++;
       }
       if(!newStops.length) return 0;
       progressStatus.textContent = `休憩地点を検索中… 0 / ${newStops.length}`;
       let poiResults = [];
       for(let k=0; k<newStops.length; k++){
-        const {tLat, tLon} = newStops[k];
+        const {tLat, tLon, restIndex} = newStops[k];
         let res = null;
-        try {
-          res = await fetchNearestPoi(tLon, tLat);
-        } catch {}
-        let restName = res ? (res.name ? `休憩${k+1}: ${res.name}` : `休憩${k+1}`) : `休憩${k+1} (${((k+1)*interval/1000).toFixed(1)}km)`;
+        try { res = await fetchNearestPoi(tLon, tLat); } catch{}
+        let restName = res ? (res.name ? `休憩${restIndex}: ${res.name}` : `休憩${restIndex}`) : `休憩${restIndex}`;
         poiResults.push({
           lon: res ? res.lon : tLon,
           lat: res ? res.lat : tLat,
@@ -136,6 +142,7 @@
         progressStatus.textContent = `休憩地点を検索中… ${k+1} / ${newStops.length}`;
         await new Promise(r=>setTimeout(r, 150)); // サーバ負荷軽減
       }
+      // ポイントリストに差し込み
       let newPts=[],idx=0,next=poiResults[idx];
       for(let i=0;i<points.length-1;i++){
         newPts.push(points[i]);
@@ -164,10 +171,9 @@
       return {lon:f.geometry.coordinates[0],lat:f.geometry.coordinates[1],name:f.properties.name||''};
     }
 
-    // === 地名・地点登録 ===
+    // === 地名・地点登録・UI操作等（省略：上記まま） ===
     function addPoint(lat,lng,name=null){points.push({lat,lng,name}); updateMarkers(); refreshPointList();}
-    function updateMarkers(){
-      clearLayers(markers); clearLayers(restMarkers);
+    function updateMarkers(){ clearLayers(markers); clearLayers(restMarkers);
       points.forEach((p,i)=>{
         let icon=iconVia;
         if(i===0) icon=iconStart;
@@ -206,22 +212,23 @@
       }); points=arr; updateMarkers(); refreshPointList();
     }});
 
-    // === メイン：ルート探索＆坂少/多2案描画 ===
+    // === メイン：坂少/多ルート＋休憩自動挿入（時間版） ===
     async function drawRouteWithSteep(includeRest=true){
       progressStatus.textContent = '';
       if(points.length<2){alert('出発地と目的地を含む2地点以上を登録してください');return;}
       const coords=points.map(p=>[p.lng,p.lat]);
       // 休憩挿入ON
       if(includeRest && restCheckbox.checked){
+        // まず通常ルート取得
         const tmpRes=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
           method:'POST',
           headers:{'Content-Type':'application/json','Authorization':apiKey},
-          body:JSON.stringify({coordinates:coords})
+          body:JSON.stringify({coordinates:coords, instructions:true})
         });
         if(!tmpRes.ok){alert('ルート取得エラー: '+tmpRes.status);return;}
         const tmpData=await tmpRes.json();
         if(tmpData?.features?.[0]) {
-          await insertRestStops(tmpData.features[0].geometry.coordinates);
+          await insertRestStopsByTime(tmpData.features[0]);
           updateMarkers(); refreshPointList();
         }
       }
