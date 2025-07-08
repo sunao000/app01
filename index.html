@@ -248,6 +248,10 @@
     async function drawRouteWithSteep(includeRest=true){
       progressStatus.textContent = '';
       if(points.length<2){alert('出発地と目的地を含む2地点以上を登録してください');return;}
+      if(points.length > 10){
+    alert('登録地点数が多すぎます（10地点までにしてください）\n休憩間隔を広げるか、経由地を減らしてください。');
+    return;
+  }
       const coords=points.map(p=>[p.lng,p.lat]);
       // 休憩挿入ON
       if(includeRest && restCheckbox.checked){
