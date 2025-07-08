@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>休憩付き坂ルート案内アプリ（等間隔・詳細ラベル/休憩ピン反映最新版）</title>
+  <title>等間隔休憩+POIラベル+ズレ表示ルート案内最新版</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
@@ -19,10 +19,12 @@
     .legend-steep { display:inline-block; border-radius:8px; padding:2px 10px; margin-right:10px; }
     .legend-blue { background:#6ab4ff; color:#003366;}
     .legend-red { background:#ffaaa2; color:#7a001b;}
+    .legend-orange { background:#ffd966; color:#a87d00;}
+    .legend-gray { background:#bcbcbc; color:#333;}
   </style>
 </head>
 <body style="background-color: white;">
-  <h2>休憩付き坂ルート案内アプリ（等間隔・詳細ラベル/休憩ピン反映最新版）</h2>
+  <h2>等間隔休憩+POIラベル+ズレ表示ルート案内最新版</h2>
   <div id="controls">
     <input id="placeInput" type="text" placeholder="地名・住所を入力" style="width: 240px;" />
     <button id="clearPlaceInputBtn">×</button>
@@ -50,6 +52,8 @@
   <div>
     <span class="legend-steep legend-blue">青：坂が少ないルート</span>
     <span class="legend-steep legend-red">赤：坂が多いルート</span>
+    <span class="legend-steep legend-orange">黄：POI（コンビニ/スーパー/道の駅）</span>
+    <span class="legend-steep legend-gray">灰：POIなしの仮休憩</span>
   </div>
   <div id="progressStatus"></div>
   <h3>登録地点リスト（ドラッグで並び替え可能）</h3>
@@ -62,7 +66,7 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/sortablejs@latest/Sortable.min.js"></script>
   <script>
-    const apiKey = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // ←OpenRouteService APIキーを入力
+    const apiKey = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // OpenRouteService APIキー
     const AUTO_REDRAW_DISTANCE = 50;
     const POI_SEARCH_RADIUS = 1000;
     const REST_POI_CATEGORIES = [533, 532, 414];
@@ -74,6 +78,7 @@
     const iconVia   = new L.Icon({ iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/blue-dot.png',   iconSize:[32,32], iconAnchor:[16,32] });
     const iconEnd   = new L.Icon({ iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/red-dot.png',    iconSize:[32,32], iconAnchor:[16,32] });
     const iconRest  = new L.Icon({ iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/orange-dot.png', iconSize:[32,32], iconAnchor:[16,32] });
+    const iconRestGray  = new L.Icon({ iconUrl:'https://maps.gstatic.com/mapfiles/ms2/micons/ltgray-dot.png', iconSize:[32,32], iconAnchor:[16,32] });
 
     const $ = id => document.getElementById(id);
     const placeInput = $('placeInput');
@@ -101,64 +106,65 @@
     };
     const clearLayers = arr => { arr.forEach(m=>map.removeLayer(m)); arr.length=0; };
 
-    // 休憩地点自動挿入（等間隔・詳細ラベル）
+    // 休憩地点自動挿入（厳密な時間/距離で等間隔＋POI無い時は仮休憩）
     async function insertRestStopsByTime(feature){
       const restInterval = Number(restTimeInput.value || 60) * 60; // 秒
       const coords = feature.geometry.coordinates;
       const steps = feature.properties.segments[0].steps;
-      let timePoints = [0];
-      let totalTime = 0;
-      for(let s of steps){
-        totalTime += s.duration;
-        timePoints.push(totalTime);
+      let cumulative = [0];
+      let t = 0;
+      for (let s of steps) {
+        t += s.duration;
+        cumulative.push(t);
       }
       let targets = [];
-      for(let t=restInterval; t<totalTime; t+=restInterval) targets.push(t);
+      for (let i=restInterval; i<t; i+=restInterval) targets.push(i);
 
-      let poiResults = [];
-      for(let i=0; i<targets.length; i++){
+      let restPoints = [];
+      for (let i=0; i<targets.length; i++) {
         let target = targets[i];
-        let idx = timePoints.findIndex(tp=>tp>=target);
-        if(idx<0) idx = timePoints.length-1;
+        // 目標時間と最も近い配列index
+        let idx = cumulative.findIndex(tp=>tp>=target);
+        if(idx<0) idx = cumulative.length-1;
         let pt = coords[Math.min(idx,coords.length-1)];
         let tLat = pt[1], tLon = pt[0];
-        let res = null;
-        try { res = await fetchNearestPoi(tLon, tLat); } catch{}
-        let typeName = res?.cat || "";
-        let placeName = res?.name || "";
-        let address = res?.address || "";
-        let coordStr = `${tLat.toFixed(5)},${tLon.toFixed(5)}`;
+        let poi=null, isPOI=false, label='', distanceDiff=0, timeDiff=0;
+        try { poi = await fetchNearestPoi(tLon, tLat); } catch{}
         let restLabel = `休憩${i+1}: `;
-        if (placeName) restLabel += placeName + (typeName ? `（${typeName}）` : "");
-        else if (typeName) restLabel += typeName;
-        else restLabel += "目標地点";
-        restLabel += address ? ` [${address}]` : ` [${coordStr}]`;
-        poiResults.push({
-          lon: res ? res.lon : tLon,
-          lat: res ? res.lat : tLat,
-          name: restLabel
+        if (poi) {
+          isPOI = true;
+          restLabel += (poi.name ? poi.name : '') + (poi.cat ? `（${poi.cat}）` : "");
+          let address = poi.address;
+          restLabel += address ? ` [${address}]` : ` [${poi.lat.toFixed(5)},${poi.lon.toFixed(5)}]`;
+          // 時間差計算
+          const stepIdx = coords.findIndex(c => Math.abs(c[0]-poi.lon)<0.0002 && Math.abs(c[1]-poi.lat)<0.0002);
+          if(stepIdx>0) {
+            timeDiff = Math.abs((cumulative[stepIdx]||target) - target);
+            distanceDiff = haversine(tLat,tLon,poi.lat,poi.lon);
+          }
+          restLabel += `（ズレ: ${(timeDiff/60).toFixed(1)}分/${distanceDiff>10?distanceDiff.toFixed(0)+"m":""})`;
+        } else {
+          isPOI = false;
+          restLabel += "仮休憩 [POIなし] ["+tLat.toFixed(5)+","+tLon.toFixed(5)+"]";
+        }
+        restPoints.push({
+          lat: poi?poi.lat:tLat,
+          lng: poi?poi.lon:tLon,
+          name: restLabel,
+          isPOI
         });
         progressStatus.textContent = `休憩地点を検索中… ${i+1} / ${targets.length}`;
         await new Promise(r=>setTimeout(r, 100));
       }
-      // 登録地点（points）へ挿入
-      // まずは出発地・目的地のみで新配列を作る
+      // 新しいpointsを作る（出発→休憩→目的地）
       let newPts=[points[0]];
-      let lastIdx = 0;
-      for(let j=0;j<poiResults.length;j++){
-        // 区間ごと等間隔に追加
-        newPts.push({
-          lat: poiResults[j].lat,
-          lng: poiResults[j].lon,
-          name: poiResults[j].name
-        });
-      }
+      for(let r of restPoints) newPts.push({lat:r.lat, lng:r.lng, name:r.name, isPOI:r.isPOI});
       newPts.push(points[points.length-1]);
       points = newPts;
       updateMarkers();
       refreshPointList();
       progressStatus.textContent = "休憩地点の追加完了！";
-      return poiResults.length;
+      return restPoints.length;
     }
 
     async function fetchNearestPoi(lon,lat){
@@ -204,9 +210,12 @@
         let icon=iconVia;
         if(i===0) icon=iconStart;
         else if(i===points.length-1) icon=iconEnd;
-        else if(p.name?.startsWith('休憩')) icon=iconRest;
+        else if(p.name?.startsWith('休憩')){
+          if (p.isPOI) icon=iconRest;
+          else icon=iconRestGray;
+        }
         const mk=L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup(p.name||`(${p.lat.toFixed(5)},${p.lng.toFixed(5)})`);
-        (icon===iconRest?restMarkers:markers).push(mk);
+        (icon===iconRest||icon===iconRestGray?restMarkers:markers).push(mk);
       });
     }
     function refreshPointList(){
@@ -265,36 +274,32 @@
         const tmpData=await tmpRes.json();
         if(tmpData?.features?.[0]) {
           await insertRestStopsByTime(tmpData.features[0]);
-          // ここで必ずリスト＆ピンを再描画
           updateMarkers();
           refreshPointList();
         }
       }
 
       // 休憩追加後のpoints配列でルート探索
-const newCoords = points.map(p=>[p.lng,p.lat]);
-let body;
-if(points.length === 2){
-  // 出発地＋目的地だけなら、代替ルート付き
-  body = {
-    coordinates: newCoords,
-    alternative_routes: {share_factor: 0.6, target_count: 3},
-    extra_info: ["steepness"]
-  };
-} else {
-  // 3点以上なら通常ルートのみ
-  body = {
-    coordinates: newCoords,
-    extra_info: ["steepness"]
-  };
-}
-routeInfo.innerHTML = "ルート計算中…";
-const res=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
-  method:'POST',
-  headers:{'Content-Type':'application/json','Authorization':apiKey},
-  body:JSON.stringify(body)
-});
-
+      const newCoords = points.map(p=>[p.lng,p.lat]);
+      let body;
+      if(points.length === 2){
+        body = {
+          coordinates: newCoords,
+          alternative_routes: {share_factor: 0.6, target_count: 3},
+          extra_info: ["steepness"]
+        };
+      } else {
+        body = {
+          coordinates: newCoords,
+          extra_info: ["steepness"]
+        };
+      }
+      routeInfo.innerHTML = "ルート計算中…";
+      const res=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':apiKey},
+        body:JSON.stringify(body)
+      });
       if(!res.ok){
         const text = await res.text();
         alert('ルート取得エラー: '+res.status+'\n'+text);
@@ -307,35 +312,44 @@ const res=await fetch(`https://api.openrouteservice.org/v2/directions/${profileS
       }
 
       // 坂の少ない/多いルートを決定
-      const routes = data.features.map((f,idx)=>{
-        const steep = f.properties.extras.steepness?.values || [];
-        let steepSum = 0;
-        for(const s of steep){
-          steepSum += Math.abs(s[1]);
-        }
-        return {feature:f, idx, steepSum, summary:f.properties.summary};
-      });
-      const best = routes.reduce((a,b)=>a.steepSum<=b.steepSum?a:b);
-      const worst = routes.reduce((a,b)=>a.steepSum>=b.steepSum?a:b);
+      let best = data.features[0], worst = data.features[0];
+      if(points.length === 2 && data.features.length>1){
+        // 2点指定のみ代替ルートあり
+        const routes = data.features.map((f,idx)=>{
+          const steep = f.properties.extras.steepness?.values || [];
+          let steepSum = 0;
+          for(const s of steep){
+            steepSum += Math.abs(s[1]);
+          }
+          return {feature:f, idx, steepSum, summary:f.properties.summary};
+        });
+        best = routes.reduce((a,b)=>a.steepSum<=b.steepSum?a:b).feature;
+        worst = routes.reduce((a,b)=>a.steepSum>=b.steepSum?a:b).feature;
+      }
 
       // 地図描画
       clearLayers(routeLayers);
       if(currentRoute) {map.removeLayer(currentRoute); currentRoute=null;}
-      const bestLayer = L.geoJSON(best.feature, { style: { color: '#0095ff', weight: 6 } }).addTo(map);
-      const worstLayer = L.geoJSON(worst.feature, { style: { color: '#ff1c1c', weight: 5, dashArray:'10 8' } }).addTo(map);
-      routeLayers.push(bestLayer, worstLayer);
+      const bestLayer = L.geoJSON(best, { style: { color: '#0095ff', weight: 6 } }).addTo(map);
+      let worstLayer = null;
+      if(points.length === 2) {
+        worstLayer = L.geoJSON(worst, { style: { color: '#ff1c1c', weight: 5, dashArray:'10 8' } }).addTo(map);
+        routeLayers.push(bestLayer, worstLayer);
+      } else {
+        routeLayers.push(bestLayer);
+      }
       map.fitBounds(bestLayer.getBounds());
 
       // サマリ表示
+      const summary = best.properties.summary;
       routeInfo.innerHTML = `
-        <b>坂が少ないルート</b>（青）距離: ${(best.summary.distance/1000).toFixed(2)}km / 時間: ${(best.summary.duration/60).toFixed(1)}分
-        <br><b>坂が多いルート</b>（赤）距離: ${(worst.summary.distance/1000).toFixed(2)}km / 時間: ${(worst.summary.duration/60).toFixed(1)}分
-        <br>勾配スコア（小さいほど坂が少ない）: <b>青 ${best.steepSum}</b> / <b>赤 ${worst.steepSum}</b>
+        <b>坂が少ないルート</b>（青）距離: ${(summary.distance/1000).toFixed(2)}km / 時間: ${(summary.duration/60).toFixed(1)}分
+        ${points.length === 2 && worst!==best ? `<br><b>坂が多いルート</b>（赤）距離: ${(worst.properties.summary.distance/1000).toFixed(2)}km / 時間: ${(worst.properties.summary.duration/60).toFixed(1)}分` : ""}
       `;
 
       // 距離グラフ用データも坂少ルートで更新
       routeDistances=[]; routeLabels=[];
-      let coordsArr = best.feature.geometry.coordinates.map(p=>({lat:p[1],lng:p[0]}));
+      let coordsArr = best.geometry.coordinates.map(p=>({lat:p[1],lng:p[0]}));
       for(let i=1;i<coordsArr.length;i++){
         const d=haversine(coordsArr[i-1].lat,coordsArr[i-1].lng,coordsArr[i].lat,coordsArr[i].lng);
         routeDistances.push(d);
