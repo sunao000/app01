@@ -206,16 +206,16 @@
 
     function addPoint(lat,lng,name=null){points.push({lat,lng,name}); updateMarkers(); refreshPointList();}
     function updateMarkers(){
-      clearLayers(markers); clearLayers(restMarkers);
-      points.forEach((p,i)=>{
-        let icon=iconVia;
-        if(i===0) icon=iconStart;
-        else if(i===points.length-1) icon=iconEnd;
-        else if(p.name?.startsWith('休憩')) icon=iconRest;
-        const mk=L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup(p.name||`(${p.lat.toFixed(5)},${p.lng.toFixed(5)})`);
-        (icon===iconRest?restMarkers:markers).push(mk);
-      });
-    }
+  clearLayers(markers); clearLayers(restMarkers);
+  points.forEach((p,i)=>{
+    let icon=iconVia;
+    if(i===0) icon=iconStart;
+    else if(i===points.length-1) icon=iconEnd;
+    else if(p.name?.startsWith('休憩')) icon=iconRest; // ←ここ大事！
+    const mk=L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup(p.name||`(${p.lat.toFixed(5)},${p.lng.toFixed(5)})`);
+    (icon===iconRest?restMarkers:markers).push(mk);
+  });
+}
     function refreshPointList(){
       pointList.innerHTML='';
       points.forEach((p,i)=>{
@@ -247,18 +247,16 @@
 
     async function drawRouteWithSteep(includeRest=true){
   progressStatus.textContent = '';
-
-  // 1. 登録地点チェック
   if(points.length < 2){
     alert('出発地と目的地を含む2地点以上を登録してください');
     return;
   }
   if(points.length > 10){
-    alert('登録地点数が多すぎます（10地点までにしてください）\n休憩間隔を広げるか、経由地を減らしてください。');
+    alert('登録地点数が多すぎます（10地点までにしてください）');
     return;
   }
 
-  // 2. 休憩自動挿入ON時はまずルート生成→等間隔で休憩挿入
+  // 休憩自動挿入ON
   if(includeRest && restCheckbox.checked){
     const coords=points.map(p=>[p.lng,p.lat]);
     const tmpRes=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
@@ -274,11 +272,13 @@
     const tmpData=await tmpRes.json();
     if(tmpData?.features?.[0]) {
       await insertRestStopsByTime(tmpData.features[0]);
-      updateMarkers(); refreshPointList();
+      // **ここでリストとピンを再描画**
+      updateMarkers();
+      refreshPointList();
     }
   }
 
-  // 3. 本番ルート生成（坂少/多ルート）
+  // 休憩追加後のpoints配列でルート探索
   const newCoords = points.map(p=>[p.lng,p.lat]);
   const body = {
     coordinates: newCoords,
