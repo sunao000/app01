@@ -205,19 +205,20 @@
 
     function addPoint(lat,lng,name=null){points.push({lat,lng,name}); updateMarkers(); refreshPointList();}
     function updateMarkers(){
-      clearLayers(markers); clearLayers(restMarkers);
-      points.forEach((p,i)=>{
-        let icon=iconVia;
-        if(i===0) icon=iconStart;
-        else if(i===points.length-1) icon=iconEnd;
-        else if(p.name?.startsWith('休憩')){
-          if (p.isPOI) icon=iconRest;
-          else icon=iconRestGray;
-        }
-        const mk=L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup(p.name||`(${p.lat.toFixed(5)},${p.lng.toFixed(5)})`);
-        (icon===iconRest||icon===iconRestGray?restMarkers:markers).push(mk);
-      });
+  clearLayers(markers); clearLayers(restMarkers);
+  points.forEach((p,i)=>{
+    let icon=iconVia;
+    if(i===0) icon=iconStart;
+    else if(i===points.length-1) icon=iconEnd;
+    else if(p.name?.startsWith('休憩')){
+      if (p.isPOI) icon=iconRest;         // ← POI休憩はオレンジピン
+      else icon=iconRestGray;             // ← 仮休憩はグレーピン
     }
+    const mk=L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup(p.name||`(${p.lat.toFixed(5)},${p.lng.toFixed(5)})`);
+    (icon===iconRest||icon===iconRestGray?restMarkers:markers).push(mk);
+  });
+}
+
     function refreshPointList(){
       pointList.innerHTML='';
       points.forEach((p,i)=>{
