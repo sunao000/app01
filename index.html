@@ -246,85 +246,104 @@
     }});
 
     async function drawRouteWithSteep(includeRest=true){
-      progressStatus.textContent = '';
-      if(points.length<2){alert('出発地と目的地を含む2地点以上を登録してください');return;}
-      if(points.length > 10){
+  progressStatus.textContent = '';
+
+  // 1. 登録地点チェック
+  if(points.length < 2){
+    alert('出発地と目的地を含む2地点以上を登録してください');
+    return;
+  }
+  if(points.length > 10){
     alert('登録地点数が多すぎます（10地点までにしてください）\n休憩間隔を広げるか、経由地を減らしてください。');
     return;
   }
-      const coords=points.map(p=>[p.lng,p.lat]);
-      // 休憩挿入ON
-      if(includeRest && restCheckbox.checked){
-        const tmpRes=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
-          method:'POST',
-          headers:{'Content-Type':'application/json','Authorization':apiKey},
-          body:JSON.stringify({coordinates:coords, instructions:true})
-        });
-        if(!tmpRes.ok){alert('ルート取得エラー: '+tmpRes.status);return;}
-        const tmpData=await tmpRes.json();
-        if(tmpData?.features?.[0]) {
-          await insertRestStopsByTime(tmpData.features[0]);
-          updateMarkers(); refreshPointList();
-        }
-      }
-      // 再ルート本番
-      const newCoords = points.map(p=>[p.lng,p.lat]);
-      const body = {
-        coordinates: newCoords,
-        alternative_routes: {share_factor: 0.6, target_count: 3},
-        extra_info: ["steepness"]
-      };
-      routeInfo.innerHTML = "ルート計算中…";
-      const res=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':apiKey},
-        body:JSON.stringify(body)
-      });
-      if(!res.ok){alert('ルート取得エラー: '+res.status);return;}
-      const data=await res.json();
-      if(!data.features?.length){alert('ルート情報が取得できません');return;}
 
-      // 勾配評価
-      const routes = data.features.map((f,idx)=>{
-        const steep = f.properties.extras.steepness?.values || [];
-        let steepSum = 0;
-        for(const s of steep){
-          steepSum += Math.abs(s[1]);
-        }
-        return {feature:f, idx, steepSum, summary:f.properties.summary};
-      });
-      const best = routes.reduce((a,b)=>a.steepSum<=b.steepSum?a:b);
-      const worst = routes.reduce((a,b)=>a.steepSum>=b.steepSum?a:b);
-
-      // 地図描画
-      clearLayers(routeLayers);
-      if(currentRoute) {map.removeLayer(currentRoute); currentRoute=null;}
-      const bestLayer = L.geoJSON(best.feature, { style: { color: '#0095ff', weight: 6 } }).addTo(map);
-      const worstLayer = L.geoJSON(worst.feature, { style: { color: '#ff1c1c', weight: 5, dashArray:'10 8' } }).addTo(map);
-      routeLayers.push(bestLayer, worstLayer);
-      map.fitBounds(bestLayer.getBounds());
-
-      // サマリ表示
-      routeInfo.innerHTML = `
-        <b>坂が少ないルート</b>（青）距離: ${(best.summary.distance/1000).toFixed(2)}km / 時間: ${(best.summary.duration/60).toFixed(1)}分
-        <br><b>坂が多いルート</b>（赤）距離: ${(worst.summary.distance/1000).toFixed(2)}km / 時間: ${(worst.summary.duration/60).toFixed(1)}分
-        <br>勾配スコア（小さいほど坂が少ない）: <b>青 ${best.steepSum}</b> / <b>赤 ${worst.steepSum}</b>
-      `;
-
-      // 距離・グラフも坂少ルートベースで更新
-      routeDistances=[]; routeLabels=[];
-      let coordsArr = best.feature.geometry.coordinates.map(p=>({lat:p[1],lng:p[0]}));
-      for(let i=1;i<coordsArr.length;i++){
-        const d=haversine(coordsArr[i-1].lat,coordsArr[i-1].lng,coordsArr[i].lat,coordsArr[i].lng);
-        routeDistances.push(d);
-        routeLabels.push([
-          `P${i}`,
-          `P${i+1}`
-        ]);
-      }
-      showChart();
-      progressStatus.textContent = "";
+  // 2. 休憩自動挿入ON時はまずルート生成→等間隔で休憩挿入
+  if(includeRest && restCheckbox.checked){
+    const coords=points.map(p=>[p.lng,p.lat]);
+    const tmpRes=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':apiKey},
+      body:JSON.stringify({coordinates:coords, instructions:true})
+    });
+    if(!tmpRes.ok){
+      const text = await tmpRes.text();
+      alert('ルート取得エラー: '+tmpRes.status+'\n'+text);
+      return;
     }
+    const tmpData=await tmpRes.json();
+    if(tmpData?.features?.[0]) {
+      await insertRestStopsByTime(tmpData.features[0]);
+      updateMarkers(); refreshPointList();
+    }
+  }
+
+  // 3. 本番ルート生成（坂少/多ルート）
+  const newCoords = points.map(p=>[p.lng,p.lat]);
+  const body = {
+    coordinates: newCoords,
+    alternative_routes: {share_factor: 0.6, target_count: 3},
+    extra_info: ["steepness"]
+  };
+  routeInfo.innerHTML = "ルート計算中…";
+  const res=await fetch(`https://api.openrouteservice.org/v2/directions/${profileSelect.value}/geojson`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':apiKey},
+    body:JSON.stringify(body)
+  });
+  if(!res.ok){
+    const text = await res.text();
+    alert('ルート取得エラー: '+res.status+'\n'+text);
+    return;
+  }
+  const data=await res.json();
+  if(!data.features?.length){
+    alert('ルート情報が取得できません');
+    return;
+  }
+
+  // 4. 坂の少ない/多いルートを決定
+  const routes = data.features.map((f,idx)=>{
+    const steep = f.properties.extras.steepness?.values || [];
+    let steepSum = 0;
+    for(const s of steep){
+      steepSum += Math.abs(s[1]);
+    }
+    return {feature:f, idx, steepSum, summary:f.properties.summary};
+  });
+  const best = routes.reduce((a,b)=>a.steepSum<=b.steepSum?a:b);
+  const worst = routes.reduce((a,b)=>a.steepSum>=b.steepSum?a:b);
+
+  // 5. 地図描画
+  clearLayers(routeLayers);
+  if(currentRoute) {map.removeLayer(currentRoute); currentRoute=null;}
+  const bestLayer = L.geoJSON(best.feature, { style: { color: '#0095ff', weight: 6 } }).addTo(map);
+  const worstLayer = L.geoJSON(worst.feature, { style: { color: '#ff1c1c', weight: 5, dashArray:'10 8' } }).addTo(map);
+  routeLayers.push(bestLayer, worstLayer);
+  map.fitBounds(bestLayer.getBounds());
+
+  // 6. サマリ表示
+  routeInfo.innerHTML = `
+    <b>坂が少ないルート</b>（青）距離: ${(best.summary.distance/1000).toFixed(2)}km / 時間: ${(best.summary.duration/60).toFixed(1)}分
+    <br><b>坂が多いルート</b>（赤）距離: ${(worst.summary.distance/1000).toFixed(2)}km / 時間: ${(worst.summary.duration/60).toFixed(1)}分
+    <br>勾配スコア（小さいほど坂が少ない）: <b>青 ${best.steepSum}</b> / <b>赤 ${worst.steepSum}</b>
+  `;
+
+  // 7. 距離グラフ用データも坂少ルートで更新
+  routeDistances=[]; routeLabels=[];
+  let coordsArr = best.feature.geometry.coordinates.map(p=>({lat:p[1],lng:p[0]}));
+  for(let i=1;i<coordsArr.length;i++){
+    const d=haversine(coordsArr[i-1].lat,coordsArr[i-1].lng,coordsArr[i].lat,coordsArr[i].lng);
+    routeDistances.push(d);
+    routeLabels.push([
+      `P${i}`,
+      `P${i+1}`
+    ]);
+  }
+  showChart();
+  progressStatus.textContent = "";
+}
+
 
     function showChart(){
       $('distanceChartContainer').style.display='block';
