@@ -148,46 +148,73 @@ async function makeRest(feat,intS){
   return res;
 }
 
-/* === ルート描画 === */
+/******************* 8. ルート描画 *******************/
 async function drawRoutes(){
-  if(pts.length<2){$('routeInfo').textContent='';return;}
-  pts=pts.filter(p=>!p.isRest);fixType();drawList();
-  markerLayer&&map.removeLayer(markerLayer);markerLayer=L.layerGroup().addTo(map);
+  if(pts.length<2){alert('2地点以上登録してください');return;}
 
+  Object.values(routeLayers).forEach(l=>{if(l)map.removeLayer(l);});
+  routeLayers={short:null,fast:null,slope:null};
+  if(markerLayer)map.removeLayer(markerLayer);
+  markerLayer=L.layerGroup().addTo(map);
+
+  // 休憩地点自動挿入
   if($('restToggle').checked){
-    try{const prep=await dir({coordinates:pts.map(p=>[p.lon,p.lat]),elevation:true,extra_info:['steepness'],preference:'fastest'},$('profileSelect').value);
-        (await makeRest(prep.features[0],Number($('restMinutes').value||60)*60)).forEach(r=>pts.splice(pts.length-1,0,r));
-        fixType();drawList();}catch(e){console.error(e);alert('休憩取得失敗');}}
-  pts.forEach(p=>L.marker([p.lat,p.lon],{icon:ICON[p.type||'via']}).addTo(markerLayer).bindTooltip(p.name));
+    try{
+      const base=await fetchRoute({
+        coordinates:pts.map(p=>[p.lon,p.lat]),
+        elevation:true,extra_info:['steepness'],
+        preference:'fastest'
+      },$('profileSelect').value);
 
-  const prof=$('profileSelect').value,cs=pts.map(p=>[p.lon,p.lat]),base={coordinates:cs,elevation:true,extra_info:['steepness']};
-  Object.values(routeLayers).forEach(l=>l&&map.removeLayer(l));routeLayers={};
+      const interval=Number($('restMinutes').value||60)*60;
+      const rests=await pickRestStops(base.features[0],interval);
+      rests.forEach(r=>{pts.splice(pts.length-1,0,{...r,type:''});});
+      if(pts[1])pts[1].type='via';
+      refreshList();
+    }catch(err){console.error(err);alert('休憩地点取得に失敗: '+err.message);}
+  }
+
+  // マーカー描画
+  pts.forEach(p=>{
+    const ic=p.type==='start'?ICONS.start: p.type==='goal'?ICONS.goal:ICONS.via;
+    markerLayer.addLayer(L.marker([p.lat,p.lon],{icon:ic}).bindTooltip(p.name));
+  });
+
+  const profile=$('profileSelect').value;
+  const coords=pts.map(p=>[p.lon,p.lat]);
+  const base={coordinates:coords,elevation:true,extra_info:['steepness']};
 
   try{
-    // 背面 勾配
-    let slopeF;
-    if(cs.length<=2){
-      const alt=await dir({...base,preference:'shortest',alternative_routes:{target_count:3,share_factor:0.6,weight_factor:1.4}},prof);
-      slopeF=alt.features.reduce((a,b)=>steep(a)<steep(b)?a:b);
-    }else slopeF=(await dir({...base,preference:'shortest'},prof)).features[0];
-    routeLayers.slope=L.geoJSON(slopeF,{pane:'routeSlope',style:{color:'#ffff00',weight:8,opacity:0.6,dashArray:'6 6'}}).addTo(map);
+    const shortest=await fetchRoute({...base,preference:'shortest'},profile);
+    routeLayers.short=L.geoJSON(shortest.features[0],{style:{color:'#00a000',weight:6}}).addTo(map);
 
-    // 中面 最短
-    const shortF=(await dir({...base,preference:'shortest'},prof)).features[0];
-    routeLayers.short=L.geoJSON(shortF,{pane:'routeShortest',style:{color:'#ff0000',weight:14,opacity:1}}).addTo(map);
+    const fastest=await fetchRoute({...base,preference:'fastest'},profile);
+    routeLayers.fast=L.geoJSON(fastest.features[0],{style:{color:'#0066ff',weight:6,dashArray:'4 4'}}).addTo(map);
 
-    // 前面 最速
-    const fastF=(await dir({...base,preference:'fastest'},prof)).features[0];
-    routeLayers.fast=L.geoJSON(fastF,{pane:'routeFastest',style:{color:'#0000ff',weight:12,opacity:1,dashArray:'14 14'}}).addTo(map);
+    const alt=await fetchRoute({...base,preference:'shortest',
+      alternative_routes:{target_count:3,share_factor:0.6,weight_factor:1.4}},profile);
+    let best=alt.features[0],min=steepSum(best);
+    alt.features.forEach(f=>{const s=steepSum(f);if(s<min){min=s;best=f;}});
+    routeLayers.slope=L.geoJSON(best,{style:{color:'#ff9900',weight:6,opacity:0.9}}).addTo(map);
 
-    toggleVis();
+    updateLayerVisibility();
 
-    const b=new L.LatLngBounds();markerLayer.eachLayer(l=>b.extend(l.getLatLng()));
-    Object.values(routeLayers).forEach(l=>l&&b.extend(l.getBounds()));b.isValid()&&map.fitBounds(b.pad(0.1));
+    const bounds=new L.LatLngBounds();
+    markerLayer.eachLayer(l=>{if(l.getLatLng)bounds.extend(l.getLatLng());});
+    [routeLayers.short,routeLayers.fast,routeLayers.slope].forEach(l=>{if(l&&l.getBounds)bounds.extend(l.getBounds());});
+    if(bounds.isValid())map.fitBounds(bounds.pad(0.1));
 
-    const [s1,s2,s3]=[shortF,fastF,slopeF].map(f=>f.properties.summary);
-    $('routeInfo').innerHTML=`<b>最短</b> ${km(s1.distance)} / ${mn(s1.duration)}  <b>最速</b> ${km(s2.distance)} / ${mn(s2.duration)}  <b>勾配</b> ${km(s3.distance)} / ${mn(s3.duration)}`;
-  }catch(e){console.error(e);alert('ルート取得失敗: '+e);}
+    const s1=shortest.features[0].properties.summary,
+          s2=fastest.features[0].properties.summary,
+          s3=best    .properties.summary;
+    $('routeInfo').innerHTML=`<b>最短</b> ${formatDist(s1.distance)} / ${formatDur(s1.duration)}<br>`+
+                             `<b>最速</b> ${formatDist(s2.distance)} / ${formatDur(s2.duration)}<br>`+
+                             `<b>勾配</b> ${formatDist(s3.distance)} / ${formatDur(s3.duration)}`;
+
+  }catch(err){
+    console.error(err);
+    alert('ルート取得に失敗しました（'+err.message+'）');
+  }
 }
 
 /* === 可視切替 === */
