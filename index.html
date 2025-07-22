@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>自転車ルート比較＋自動休憩 (v3)</title>
+<title>自転車ルート比較＋自動休憩 (v4)</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -64,9 +64,9 @@
 
 <script>
 /* === 定数 === */
-const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9';   // ←★あなたの API キー
+const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9';   // ←★ここにあなたの API キー
 const ORS_ROOT = 'https://api.openrouteservice.org';
-const PROXY    = '';   // 直接呼び出すときは空
+const PROXY    = '';
 const POI_CATS = [451,443,624,518];
 const CAT_NAME = {451:'コンビニ',443:'ドラッグストア',624:'道の駅',518:'スーパー'};
 const RADII    = [1000,2000,5000];
@@ -178,9 +178,9 @@ async function pois(lat,lon,buf){
 
 /* === 休憩地点 === */
 const arr=x=>Array.isArray(x)?x:(x!=null?[x]:[]);
-const pName = p =>{
+const pName = p => {
   const t = p.properties?.osm_tags || {};
-  /* 優先度: 日本語名 > 通常名 > ブランド > 運営者 */
+  // 優先度: 日本語名 > 通常名 > ブランド > 運営者
   return t['name:ja'] || t.name || t.brand || t.operator ||
          p.properties?.name || '';
 };
@@ -196,15 +196,16 @@ async function makeRest(feat,intS){
     if(acc>=intS){
       const [lon,lat]=crd[st.way_points[1]],poi=await nearPoi(lat,lon);
       if(poi){
-        const cat=POI_CATS.find(id=>arr(poi.properties.category_ids).includes(id));
+        const cat = POI_CATS.find(id=>arr(poi.properties.category_ids).includes(id));
         const display = pName(poi) || CAT_NAME[cat] ||
                         poi.properties?.category || '休憩地点';
-        res.push({name:display,
-                   lat:poi.geometry.coordinates[1],
-                   lon:poi.geometry.coordinates[0],isRest:true});
-                  lat:poi.geometry.coordinates[1],
-                  lon:poi.geometry.coordinates[0],isRest:true});
-        acc=0;
+        res.push({
+          name : display,
+          lat  : poi.geometry.coordinates[1],
+          lon  : poi.geometry.coordinates[0],
+          isRest: true
+        });
+        acc = 0;
       }
     }
   }}return res;
