@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>自転車ルート比較＋自動休憩 (v4)</title>
+<title>自転車ルート比較＋自動休憩 (v5)</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -64,7 +64,7 @@
 
 <script>
 /* === 定数 === */
-const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9';   // ←★ここにあなたの API キー
+const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9';   // ← あなたの OpenRouteService API キー
 const ORS_ROOT = 'https://api.openrouteservice.org';
 const PROXY    = '';
 const POI_CATS = [451,443,624,518];
@@ -170,10 +170,12 @@ async function pois(lat,lon,buf){
   const key=`${lat.toFixed(3)},${lon.toFixed(3)},${buf}`;
   if(poiCache.has(key))return poiCache.get(key);
   await sleep(1100);
-  const d=await post(`${ORS_ROOT}/pois`,{request:'pois',
+  const d=await post(`${ORS_ROOT}/pois`,{   // ← columns を外して 400 解消
+    request:'pois',
     geometry:{geojson:{type:'Point',coordinates:[lon,lat]},buffer:buf},
-    filters:{category_ids:POI_CATS},limit:20,columns:["name","osm_tags"]     // ★追加：名前とブランドを返してもらう
-});
+    filters:{category_ids:POI_CATS},
+    limit:20
+  });
   poiCache.set(key,d);return d;
 }
 
@@ -198,10 +200,11 @@ async function makeRest(feat,intS){
       const [lon,lat]=crd[st.way_points[1]],poi=await nearPoi(lat,lon);
       if(poi){
         const cat = POI_CATS.find(id=>arr(poi.properties.category_ids).includes(id));
-        const display = pName(poi)                          // 店舗名（最優先）
-             || CAT_NAME[cat]                       // 用意した和名
-             || poi.properties?.osm_value           // 例: convenience / supermarket
-             || '休憩地点';                          // それでも無ければ
+        const display = pName(poi) ||
+                        CAT_NAME[cat] ||
+                        poi.properties?.category ||
+                        poi.properties?.osm_value ||
+                        '休憩地点';
         res.push({
           name : display,
           lat  : poi.geometry.coordinates[1],
