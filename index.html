@@ -272,13 +272,17 @@ async function drawRoutes(){
 
 /************** 10. レイヤ可視切替 **************/
 function vis(){
-  const chk=id=>$(`#${id}`).checked;
-  ({short:'chkShortest',fast:'chkFastest',slope:'chkSlope'})
-    .forEach?.(()=>{}) // dummy to satisfy linter
-  for(const k in routeLayers){
-    if(routeLayers[k]) (chk({short:'chkShortest',fast:'chkFastest',slope:'chkSlope'}[k])?routeLayers[k].addTo(map):map.removeLayer(routeLayers[k]));
-  }
-}
+   const idMap={short:'chkShortest',fast:'chkFastest',slope:'chkSlope'};
+   for(const k in routeLayers){
+     if(!routeLayers[k]) continue;
+     const cb=$(`#${idMap[k]}`);               // ← 必ず要素を取得
+     if(cb && cb.checked){
+       routeLayers[k].addTo(map);
+     }else{
+       map.removeLayer(routeLayers[k]);
+     }
+   }
+ }
 </script>
 </body>
 </html>
