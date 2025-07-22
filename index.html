@@ -178,7 +178,12 @@ async function pois(lat,lon,buf){
 
 /* === 休憩地点 === */
 const arr=x=>Array.isArray(x)?x:(x!=null?[x]:[]);
-const pName=p=>p.properties?.osm_tags?.['name:ja']||p.properties?.osm_tags?.name||p.properties?.name||'';
+const pName = p =>{
+  const t = p.properties?.osm_tags || {};
+  /* 優先度: 日本語名 > 通常名 > ブランド > 運営者 */
+  return t['name:ja'] || t.name || t.brand || t.operator ||
+         p.properties?.name || '';
+};
 async function nearPoi(lat,lon){
   for(const r of RADII){
     try{const d=await pois(lat,lon,r);if(d.features.length)return d.features[0];}catch{}
@@ -192,7 +197,11 @@ async function makeRest(feat,intS){
       const [lon,lat]=crd[st.way_points[1]],poi=await nearPoi(lat,lon);
       if(poi){
         const cat=POI_CATS.find(id=>arr(poi.properties.category_ids).includes(id));
-        res.push({name:pName(poi)||CAT_NAME[cat]||'休憩地点',
+        const display = pName(poi) || CAT_NAME[cat] ||
+                        poi.properties?.category || '休憩地点';
+        res.push({name:display,
+                   lat:poi.geometry.coordinates[1],
+                   lon:poi.geometry.coordinates[0],isRest:true});
                   lat:poi.geometry.coordinates[1],
                   lon:poi.geometry.coordinates[0],isRest:true});
         acc=0;
