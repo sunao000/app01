@@ -88,7 +88,10 @@ let pts=[], map, markerLayer, routeLayers={}, poiCache=new Map();
 window.addEventListener('DOMContentLoaded',()=>{
   map=L.map('map').setView([34.0708,134.5549],11);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'©OpenStreetMap'}).addTo(map);
-  ['routeShortest','routeFastest','routeSlope'].forEach((p,i)=>map.createPane(p).style.zIndex=700+i*10);
+  // ★ pane を「Slope(背面) → Shortest → Fastest(最前面)」でセット
+  map.createPane('routeSlope'   ).style.zIndex = 690;  // 背面
+  map.createPane('routeShortest').style.zIndex = 700;
+  map.createPane('routeFastest' ).style.zIndex = 710;  // 最前面
 
   $('searchBtn').onclick = ()=>{const q=$('placeInput').value.trim();q&&searchNom(q);};
   $('locBtn').onclick    = addCurrent;
