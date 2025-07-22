@@ -172,7 +172,8 @@ async function pois(lat,lon,buf){
   await sleep(1100);
   const d=await post(`${ORS_ROOT}/pois`,{request:'pois',
     geometry:{geojson:{type:'Point',coordinates:[lon,lat]},buffer:buf},
-    filters:{category_ids:POI_CATS},limit:20});
+    filters:{category_ids:POI_CATS},limit:20,columns:["name","osm_tags"]     // ★追加：名前とブランドを返してもらう
+});
   poiCache.set(key,d);return d;
 }
 
@@ -197,8 +198,10 @@ async function makeRest(feat,intS){
       const [lon,lat]=crd[st.way_points[1]],poi=await nearPoi(lat,lon);
       if(poi){
         const cat = POI_CATS.find(id=>arr(poi.properties.category_ids).includes(id));
-        const display = pName(poi) || CAT_NAME[cat] ||
-                        poi.properties?.category || '休憩地点';
+        const display = pName(poi)                          // 店舗名（最優先）
+             || CAT_NAME[cat]                       // 用意した和名
+             || poi.properties?.osm_value           // 例: convenience / supermarket
+             || '休憩地点';                          // それでも無ければ
         res.push({
           name : display,
           lat  : poi.geometry.coordinates[1],
