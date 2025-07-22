@@ -66,7 +66,7 @@
 /* === 定数 === */
 const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9';   // ←★ここにあなたの API キー
 const ORS_ROOT = 'https://api.openrouteservice.org';
-const PROXY    = 'https://corsproxy.io/?';
+const PROXY    = 'https://corsproxy.io/?url=';
 const POI_CATS = [451,443,624,518];
 const CAT_NAME = {451:'コンビニ',443:'ドラッグストア',624:'道の駅',518:'スーパー'};
 const RADII    = [1000,2000,5000];
@@ -156,7 +156,7 @@ function addCurrent(){
 }
 
 /* === ORS ラッパ === */
-const post=(u,b)=>fetch(PROXY+u,{method:'POST',
+const post = (u,b) => fetch(PROXY + encodeURIComponent(u),{method:'POST',
   headers:{'Content-Type':'application/json','Authorization':ORS_KEY},
   body:JSON.stringify(b)}).then(r=>r.ok?r.json():r.text().then(t=>Promise.reject(t)));
 async function dir(body,profile){
