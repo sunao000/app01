@@ -66,7 +66,7 @@
 /* === 定数 === */
 const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9';   // ←★ここにあなたの API キー
 const ORS_ROOT = 'https://api.openrouteservice.org';
-const PROXY    = 'https://corsproxy.io/?url=';
+const PROXY    = '';
 const POI_CATS = [451,443,624,518];
 const CAT_NAME = {451:'コンビニ',443:'ドラッグストア',624:'道の駅',518:'スーパー'};
 const RADII    = [1000,2000,5000];
@@ -74,10 +74,10 @@ const RADII    = [1000,2000,5000];
 /* === ヘルパ === */
 const $          = id=>document.getElementById(id);
 const formatDist = d=>(d/1000).toFixed(2)+' km';
-const formatDur  = s=>{const m=Math.round(s/60);return m<60?`${m} 分`:`${Math.floor(m/60)} 時間 ${m%60} 分`;};
+const formatDur  = s=>{const m=Math.round(s/60);return m<60?${m} 分:${Math.floor(m/60)} 時間 ${m%60} 分;};
 const sleep      = ms=>new Promise(r=>setTimeout(r,ms));
 const steepSum   = f=>(f?.properties?.extras?.steepness?.values||[]).reduce((s,e)=>s+Math.abs(e[2]||0),0);
-const icon       = c=>new L.Icon({iconUrl:`https://maps.gstatic.com/mapfiles/ms2/micons/${c}-dot.png`,
+const icon       = c=>new L.Icon({iconUrl:https://maps.gstatic.com/mapfiles/ms2/micons/${c}-dot.png,
                                   iconSize:[32,32],iconAnchor:[16,32]});
 const ICONS      = {start:icon('green'),via:icon('blue'),goal:icon('red')};
 
@@ -107,10 +107,10 @@ window.addEventListener('DOMContentLoaded',()=>{
 
 /* === Nominatim === */
 async function nomSearch(q){
-  let url=`https://nominatim.openstreetmap.org/search?format=json&limit=10&q=${encodeURIComponent(q)}`;
+  let url=https://nominatim.openstreetmap.org/search?format=json&limit=10&q=${encodeURIComponent(q)};
   if($('nearbyOnly').checked){
     const b=map.getBounds(), box=[b.getWest(),b.getNorth(),b.getEast(),b.getSouth()].join(',');
-    url+=`&viewbox=${box}&bounded=1`;
+    url+=&viewbox=${box}&bounded=1;
   }
   const arr=await (await fetch(url)).json(), ul=$('searchResults');
   ul.innerHTML=''; ul.hidden=!arr.length;
@@ -134,7 +134,7 @@ function drawList(){
   const ul=$('pointList');ul.innerHTML='';
   pts.forEach((p,i)=>{
     const li=document.createElement('li');li._idx=i;
-    li.innerHTML=`<span>${p.name}</span>`;
+    li.innerHTML=<span>${p.name}</span>;
     const d=document.createElement('button');d.textContent='×';d.className='del';
     d.onclick=e=>{e.stopPropagation();pts.splice(i,1);fixType();drawList();};
     li.appendChild(d);ul.appendChild(li);
@@ -156,21 +156,21 @@ function addCurrent(){
 }
 
 /* === ORS ラッパ === */
-const post = (u,b) => fetch(PROXY + encodeURIComponent(u),{method:'POST',
+const post=(u,b)=>fetch(PROXY+u,{method:'POST',
   headers:{'Content-Type':'application/json','Authorization':ORS_KEY},
   body:JSON.stringify(b)}).then(r=>r.ok?r.json():r.text().then(t=>Promise.reject(t)));
 async function dir(body,profile){
   const wait=1100-(Date.now()-lastDir);if(wait>0)await sleep(wait);
-  const j=await post(`${ORS_ROOT}/v2/directions/${profile}/geojson`,body);lastDir=Date.now();return j;
+  const j=await post(${ORS_ROOT}/v2/directions/${profile}/geojson,body);lastDir=Date.now();return j;
 }
 const fetchRoute = dir;  // alias
 
 /* === POI === */
 async function pois(lat,lon,buf){
-  const key=`${lat.toFixed(3)},${lon.toFixed(3)},${buf}`;
+  const key=${lat.toFixed(3)},${lon.toFixed(3)},${buf};
   if(poiCache.has(key))return poiCache.get(key);
   await sleep(1100);
-  const d=await post(`${ORS_ROOT}/pois`,{request:'pois',
+  const d=await post(${ORS_ROOT}/pois,{request:'pois',
     geometry:{geojson:{type:'Point',coordinates:[lon,lat]},buffer:buf},
     filters:{category_ids:POI_CATS},limit:20});
   poiCache.set(key,d);return d;
@@ -284,9 +284,9 @@ async function drawRoutes(){
           s2=fastest .features[0].properties.summary,
           s3=slopeFeature.properties.summary;
     $('routeInfo').innerHTML=
-      `<b>最短</b> ${formatDist(s1.distance)} / ${formatDur(s1.duration)}<br>`+
-      `<b>最速</b> ${formatDist(s2.distance)} / ${formatDur(s2.duration)}<br>`+
-      `<b>勾配</b> ${formatDist(s3.distance)} / ${formatDur(s3.duration)}`;
+      <b>最短</b> ${formatDist(s1.distance)} / ${formatDur(s1.duration)}<br>+
+      <b>最速</b> ${formatDist(s2.distance)} / ${formatDur(s2.duration)}<br>+
+      <b>勾配</b> ${formatDist(s3.distance)} / ${formatDur(s3.duration)};
 
   }catch(err){
     console.error(err);
