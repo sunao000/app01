@@ -193,15 +193,15 @@ async function drawRoutes(){
     routeLayers.slope=L.geoJSON(slopeF,{pane:'routeSlope',
       style:{color:'#ff00ff',weight:3,opacity:0.45,dashArray:'6 6'}}).addTo(map);
 
-    /* ② 最短（中面、太ライム） */
-    shortF=(await dir({...base,preference:'shortest'},prof)).features[0];
-    routeLayers.short=L.geoJSON(shortF,{pane:'routeShortest',
-      style:{color:'#00ff00',weight:8,opacity:1}}).addTo(map);
+    // 最短  : 超太・真緑
+style:{color:'#00c800',weight:10,opacity:1}
 
-    /* ③ 最速（前面、太青点線） */
-    fastF=(await dir({...base,preference:'fastest'},prof)).features[0];
-    routeLayers.fast=L.geoJSON(fastF,{pane:'routeFastest',
-      style:{color:'#0066ff',weight:6,opacity:1,dashArray:'10 10'}}).addTo(map);
+// 最速  : 太・白実線 (地図どの色とも被らない)
+style:{color:'#ffffff',weight:8,opacity:1}
+
+// 勾配  : 中細・黒の破線
+style:{color:'#000000',weight:4,opacity:0.6,dashArray:'4 8'}
+
 
     toggleVis();
 
