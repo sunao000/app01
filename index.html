@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>自転車ルート比較＋自動休憩（時間／kJ 基準）v5.1.1 CORS Fix</title>
+<title>自転車ルート比較＋自動休憩（時間／kJ 基準）v5.2 CORS Auto‑Fallback</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
@@ -118,14 +118,15 @@
 
 <script>
 (function(){
-  console.log('route app build v5.1.1 — CORS Fix');
+  console.log('route app build v5.2 — CORS auto‑fallback');
 
   /* === 定数 === */
-  const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // ←★必ず自分のキーを設定
+  const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // ← 公開リポジトリでは .env など非公開管理を推奨
   const ORS_ROOT = 'https://api.openrouteservice.org';
-  // 必要なら独自 CORS プロキシを設定（URL 末尾に / を含める）
-  // 例: 'https://ors-proxy.your-domain.workers.dev/'
-  const PROXY    = '';
+  // GitHub Pages のような静的環境では CORS を回避するため **必ず** プロキシを使う
+  // ここでは手軽に試せる https://corsproxy.io/? を既定値に
+  // 速度や安定性を求める場合は Cloudflare Workers で独自リレーを用意
+  const PROXY    = 'https://corsproxy.io/?';
 
   const POI_CATS = [451,443,624,518];
   const CAT_NAME = {451:'コンビニ',443:'ドラッグストア',624:'道の駅',518:'スーパー'};
@@ -431,3 +432,4 @@
 </script>
 </body>
 </html>
+
