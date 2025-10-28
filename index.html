@@ -1227,48 +1227,24 @@ function updateRestPoiPanel(){
       x.textContent = '・（候補なし）';
       ul.appendChild(x);
     } else {
-      g.pois.forEach((p, j) => {
-        const it = document.createElement('li');
-        it.style.padding = '2px 0';
-        const dTrigger = (typeof p.distFromTriggerM === 'number') ? ` / トリガー距離 ${formatDist(p.distFromTriggerM)}` : '';
-        const dPerp = (p._proj && typeof p._proj.perpM === 'number') ? ` / ルート⊥ <b>${formatDist(p._proj.perpM)}</b>` : '';
-        const w = Number.isFinite(Number(p._w)) ? Number(p._w) : 1;
-        it.innerHTML = `
-          ・${p.name}　${p.lat.toFixed(5)}　${p.lon.toFixed(5)}${dTrigger}${dPerp}
-          <label style="margin-left:6px">重み
-            <input type="number" step="0.1" min="0" value="${w}"
-                   data-bind="poi-w" data-trigger-index="${i}" data-poi-index="${j}"
-                   style="width:70px">
-          </label>`;
-        ul.appendChild(it);
-      });
+      g.pois.forEach((p) => {
+  const it = document.createElement('li');
+  it.style.padding = '2px 0';
+  const dTrigger = (typeof p.distFromTriggerM === 'number')
+    ? ` / トリガー距離 ${formatDist(p.distFromTriggerM)}`
+    : '';
+  const dPerp = (p._proj && typeof p._proj.perpM === 'number')
+    ? ` / ルート⊥ <b>${formatDist(p._proj.perpM)}</b>`
+    : '';
+  it.innerHTML = `・${p.name}　${p.lat.toFixed(5)}　${p.lon.toFixed(5)}${dTrigger}${dPerp}`;
+  ul.appendChild(it);
+});
     }
 
     li.appendChild(ul);
     ol.appendChild(li);
   });
 }
-
-// ▼▼ ここから：候補POIの「重み」入力を拾うイベント委譲（1回だけ定義） ▼▼
-(function bindPoiWeightInput(){
-  const panel = document.getElementById('restPoiPanel');
-  if (!panel) return; // 念のため
-  panel.addEventListener('input', (ev) => {
-    const t = ev.target;
-    if (!(t instanceof HTMLInputElement)) return;
-    if (t.dataset.bind !== 'poi-w') return;        // 重み入力の合図
-    const gi = Number(t.dataset.triggerIndex);     // どの休憩トリガーか
-    const pj = Number(t.dataset.poiIndex);         // その中の何番目のPOIか
-    const v  = Number(t.value);
-    if (!Number.isFinite(gi) || !Number.isFinite(pj)) return;
-    if (!restGroups?.[gi]?.pois?.[pj]) return;
-
-    // 0未満は不可。未入力/NaNは1にフォールバック
-    restGroups[gi].pois[pj]._w = Math.max(0, Number.isFinite(v) ? v : 1);
-  });
-})();
-// ▲▲ ここまで：イベント委譲 ▼▼
-
 
 // 組み合わせ表示専用：使用地点だけピンを出す
 function setComboMarkers(start, picksArray, goal){
@@ -1475,12 +1451,9 @@ function nodeCost(p, targetCumD){
   const perpM   = Number(p?._proj?.perpM) ?? 0;
   const trigM   = Number(p?.distFromTriggerM) ?? 0;
   const alignM  = Math.abs((Number(p?._proj?.cumD) ?? targetCumD) - targetCumD);
-  const base =
-    (SCORE_WEIGHTS.wAlign * (alignM/1000)) +
-    (SCORE_WEIGHTS.wPerp  * (perpM/1000))  +
-    (SCORE_WEIGHTS.wTrig  * (trigM/1000));
-  const w = Number(p?._w) || 1; // 1=標準、>1=優先
-  return base / Math.max(0.1, w); // 下限で暴走防止
+return (SCORE_WEIGHTS.wAlign * (alignM/1000)) +
+       (SCORE_WEIGHTS.wPerp  * (perpM/1000))  +
+       (SCORE_WEIGHTS.wTrig  * (trigM/1000));
 }
 
 
@@ -2005,6 +1978,7 @@ function dpSearch(restGroups, cumTotals){
 </script>
 </body>
 </html>
+
 
 
 
