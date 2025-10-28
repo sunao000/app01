@@ -83,11 +83,11 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
     </div>
 
     <div style="margin-top:6px">
-      <label><input type="checkbox" id="optAccum" checked> 積算トリガ</label><br>
+      <label><input type="checkbox" id="optAccum"> 積算トリガ</label><br>
       <label><input type="checkbox" id="optStatTrigger"> 統計トリガ</label>
       平均 <input id="statMean" type="number" value="20" step="1">km
       分散 <input id="statVar" type="number" value="9" step="0.5">km²<br>
-      <label><input type="checkbox" id="optPercentTrigger"> 割合トリガ</label>
+      <label><input type="checkbox" id="optPercentTrigger" checked> 割合トリガ</label>
       %ごと <input id="percentStep" type="number" value="25" step="1"> %
       <select id="percentMetric">
         <option value="distance">距離</option>
@@ -520,7 +520,9 @@ async function drawRoutes(){
     /* ===== 休憩地点挿入 ===== */
     const mass = 75; // 体重+バイク質量(例)
     const flat = 18; // 平坦係数
-    const rests = await makeRestPoints(routeData.fastest, mass, flat);
+    const baseFeature = routeData.arterial || routeData.fastest;
+    const rests = await makeRestPoints(baseFeature, mass, flat);
+
     restGroups = (rests || []).map(r => ({ rest: r, pois: [] }));
 
     restList = []; // 前回のリストをリセット
@@ -586,9 +588,11 @@ if ($('poiToggle').checked) {
 
     }
 
-    // デフォルト表示は最速
-    showSingleRoute('fastest', true);
-    setActiveButton($('btnShowFastest'));
+// デフォルト表示は幹線優先（なければ最速）
+const prefer = routeData.arterial ? 'arterial' : 'fastest';
+showSingleRoute(prefer, true);
+setActiveButton(prefer === 'arterial' ? $('btnShowArterial') : $('btnShowFastest'));
+
 
     // 区間統計を表示
     await showRouteLegSummary();
@@ -1651,11 +1655,13 @@ if (g?.rest && Number.isFinite(g.rest.routeD)) {
 }
 
 function ensureProjections() {
+  const base = routeData.arterial || routeData.fastest;
   // ルート情報や休憩グループが存在しない場合は何もしない
-  if (!routeData.fastest || !Array.isArray(restGroups) || !restGroups.length) return;
+  if (!base || !Array.isArray(restGroups) || !restGroups.length) return;
 
   // ルート上の累積データを構築
-  const { cum, coords } = buildCums(routeData.fastest);
+  const { cum, coords } = buildCums(base);
+
   window.__routeCums = { cum, coords };
   window.__cumTotals = {
     D: cum.D.at(-1),
@@ -1869,3 +1875,4 @@ function dpSearch(restGroups, cumTotals){
 </script>
 </body>
 </html>
+
