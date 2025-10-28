@@ -725,6 +725,15 @@ async function totalEnergyKJ(feature,mass,flat){
 async function makeRestPoints(feature,mass,flat){
   const coords=feature.geometry.coordinates;
   const segs=(feature.properties.segments||[]);
+    // 旅全体の合計（距離は既存の totalDist 代わりに summary.distance を利用）
+  const totalD = feature?.properties?.summary?.distance || 0;        // m
+  const totalT = feature?.properties?.summary?.duration || 0;        // s
+  const totalE = await totalEnergyKJ(feature, mass, flat);           // kJ
+
+  // 現在位置までの累積（秒 / kJ）— 各stepで足していく
+  let cumTsec = 0;   // s
+  let cumEkJ  = 0;   // kJ
+  
   const hasEle = coords[0].length>=3;
   const cumDist=[0];
   for(let i=1;i<coords.length;i++){
@@ -744,6 +753,9 @@ async function makeRestPoints(feature,mass,flat){
         const d=st.distance||0, t=st.duration||0;
         const dz = hasEle ? ((coords[i1][2]||0)-(coords[i0][2]||0)) : 0;
         const dE = energyStepKJ(d,dz,mass,flat);
+        // ★ 累積（秒 / kJ）を更新
+        cumTsec += t;
+        cumEkJ  += dE;
         acc += (basis==='time') ? t : dE;
         if (acc >= thr) {
   const candLat = coords[i1][1];
@@ -765,7 +777,13 @@ async function makeRestPoints(feature,mass,flat){
     const remainD = totalD - hereCum; // m
     if (remainD <= skipGoalKm * 1000) {
       shouldSkip = true;
-      logRest(`[ACCUM] ${(hereCum/1000).toFixed(2)} km → HIT（スキップ: ゴールまで ${(remainD/1000).toFixed(2)} km）`);
+            const remainD = totalD - hereCum;           // m
+      const remainT = Math.max(0, totalT - cumTsec); // s
+      const remainE = Math.max(0, totalE - cumEkJ);  // kJ
+
+      shouldSkip = true;
+      logRest(`[ACCUM] ${(hereCum/1000).toFixed(2)} km → HIT（スキップ: ゴールまで ${(remainD/1000).toFixed(2)} km / ${formatDur(remainT)} / ${remainE.toFixed(0)} kJ）`);
+
     }
   }
 
@@ -2037,6 +2055,7 @@ function dpSearch(restGroups, cumTotals){
 </script>
 </body>
 </html>
+
 
 
 
