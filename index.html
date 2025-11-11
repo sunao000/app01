@@ -1741,17 +1741,20 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
   // トリガー〜ゴール側から最低3件
   await searchSide('after',  triggerD, totalD);
 
-  // トリガー地点からの距離が近い順に並べ替え
+    // トリガー地点からの距離が近い順に並べ替え
   beforeList.sort((a,b)=>(a.distFromTriggerM||Infinity)-(b.distFromTriggerM||Infinity));
   afterList.sort((a,b)=>(a.distFromTriggerM||Infinity)-(b.distFromTriggerM||Infinity));
 
+  const merged = [...beforeList, ...afterList];
+  merged.sort((a,b)=>(a.distFromTriggerM||Infinity)-(b.distFromTriggerM||Infinity));
+
   logRest(
     `[SPARSE補完] #${triggerIndex+1} ${(rest.routeD/1000).toFixed(2)} km: ` +
-    `スタート側 ${beforeList.length}件 / ゴール側 ${afterList.length}件`
+    `スタート側 ${beforeList.length}件 / ゴール側 ${afterList.length}件 / 最終 ${merged.length}件（トリガー近い順）`
   );
 
-  // before → after の順で返す（呼び出し側で poiLimit などで絞られる想定）
-  return [...beforeList, ...afterList];
+  return merged;
+
 }
 
 
@@ -2957,4 +2960,5 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
