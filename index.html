@@ -814,28 +814,18 @@ tEnd(tkRest, `hits=${rests.length}`);
 
       // POI検索（半径固定・近い順に n 件）
 // POI検索（半径固定・近い順に n 件）
+// POI検索（「過疎判定＋補完」を先にやる版）
 if ($('poiToggle').checked) {
   const baseRadius = Number($('poiRadius').value) || 50000;
-  const limit = Math.max(1, Number($('poiLimit').value) || 5);
-  const cfgSparse = getSparseConfig();   // ★ 追加：過疎設定を読む
+  const limit      = Math.max(1, Number($('poiLimit').value) || 5);
 
   for (let idx = 0; idx < rests.length; idx++) {
     const r = rests[idx];
     try {
-      const tkPOI = tStart(`POI#${idx+1}`);
-      let pois = await fetchPoisAround(r.lat, r.lon, baseRadius, limit);
-      tEnd(tkPOI, `found=${pois.length}`);
+      // ★ まずは「過疎判定 → 必要なら補完 → 足りなければ通常検索」の順で POI を確定
+      const pois = await resolvePoisForTrigger(idx, r, baseRadius, limit);
 
-      logRest(`[POI] ${(r.routeD / 1000).toFixed(2)} km: 半径${baseRadius}m → ${pois.length}件（近い順）`);
-
-      // ★ ここから：休憩過疎地域なら補完探索を試みる
-      if (cfgSparse.enabled && pois.length < cfgSparse.sparseMin){
-        const tkFB = tStart(`POI_fallback#${idx+1}`);
-        pois = await fallbackPoisForTrigger(idx, r, pois);
-        tEnd(tkFB, `after_fallback=${pois.length}`);
-        logRest(`  → 補完後: ${pois.length}件`);
-      }
-      // ★ ここまで
+      logRest(`[POI] ${(r.routeD / 1000).toFixed(2)} km: 最終的に ${pois.length}件`);
 
       // 休憩トリガーごとに保持
       if (restGroups[idx]) {
@@ -863,10 +853,11 @@ if ($('poiToggle').checked) {
     }
   }
 
-  // ▼ 既存：パネル＆射影の更新
+  // 既存処理：射影付与＆パネル更新
   ensureProjections();
   updateRestPoiPanel();
 }
+
 
 
     }
@@ -1566,6 +1557,65 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
   return added;
 }
 
+/* ===== トリガー単位：過疎判定 → 必要なら補完 → 結果のPOI配列を返す ===== */
+async function resolvePoisForTrigger(idx, rest, baseRadius, limit){
+  const cfg = getSparseConfig();
+  const useSparse = cfg.enabled;
+
+  // 過疎判定用：まず「狭い半径＆件数少なめ」でサッと検索
+  let pois = [];
+  if (useSparse){
+    const tkQuick = tStart(`POI_quick#${idx+1}`);
+    const quick = await fetchPoisAround(
+      rest.lat,
+      rest.lon,
+      cfg.sparseRadius,   // 過疎判定用の半径
+      cfg.sparseMin       // 過疎判定用の件数
+    );
+    tEnd(tkQuick, `quick_found=${quick.length}`);
+    logRest(`[SPARSECHK] ${(rest.routeD/1000).toFixed(2)} km: 半径${cfg.sparseRadius}m で ${quick.length}件（判定閾値 ${cfg.sparseMin}）`);
+
+    // 過疎なら：クイック結果を初期値にして補完処理をかける
+    if (quick.length < cfg.sparseMin){
+      const tkFB = tStart(`POI_fallback#${idx+1}`);
+      pois = await fallbackPoisForTrigger(idx, rest, quick);
+      tEnd(tkFB, `after_fallback=${pois.length}`);
+      logRest(`  → 補完後: ${pois.length}件`);
+    }else{
+      // 過疎でないなら、そのまま quick 結果を使う
+      pois = quick;
+    }
+  }
+
+  // まだ limit に届いていなければ、通常のPOI検索で「盛る」
+  if (pois.length < limit){
+    const tkMain = tStart(`POI_main#${idx+1}`);
+    const more = await fetchPoisAround(rest.lat, rest.lon, baseRadius, limit);
+    tEnd(tkMain, `main_found=${more.length}`);
+
+    // 重複を除いてマージ
+    const seen = new Set(
+      pois.map(p => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`)
+    );
+    more.forEach(p=>{
+      const key = `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      pois.push(p);
+    });
+
+    logRest(`  → 通常検索マージ後: ${pois.length}件（上限 ${limit}）`);
+  }
+
+  // 近い順にちょっと整える
+  pois.sort((a,b)=>{
+    const da = typeof a.distFromTriggerM === 'number' ? a.distFromTriggerM : Infinity;
+    const db = typeof b.distFromTriggerM === 'number' ? b.distFromTriggerM : Infinity;
+    return da - db;
+  });
+
+  return pois;
+}
 
 
 /* ===== 小ユーティリティ ===== */
@@ -2682,6 +2732,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
