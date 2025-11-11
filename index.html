@@ -1613,53 +1613,6 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
   if (!rc || !rc.cum || !rc.coords) return existingPois;
 
   const { cum, coords } = rc;
-  const totalD   = cum.D.at(-1) || 0;         // ルート全体[m]
-  const triggerD = rest.routeD || 0;         // このトリガー[m]
-  const triggerLL = L.latLng(rest.lat, rest.lon);
-
-  const beforeON = cfg.beforeON;
-  const afterON  = cfg.afterON;
-
-  const beforeList = [];
-  const afterList  = [];
-
-  // 重複チェック（緯度経度）
-  const seen = new Set();
-
-  // まずは quick（既に見つかった POI）を side 別に振り分け
-  (existingPois || []).forEach(po => {
-    if (!po) return;
-    const key = `${po.lat.toFixed(6)},${po.lon.toFixed(6)}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-
-    // ルート上への射影＆トリガーとの距離
-    po._proj = po._proj || projectToRoute(po.lat, po.lon, coords, cum);
-    po.distFromTriggerM = triggerLL.distanceTo([po.lat, po.lon]);
-
-    if (po._proj.cumD < triggerD && beforeON && beforeList.length < 3){
-      po._side = 'before';
-      beforeList.push(po);
-    } else if (po._proj.cumD > triggerD && afterON && afterList.length < 3){
-      po._side = 'after';
-      afterList.push(po);
-    }
-  });
-
-  // 半径を段階的に拡大しながら探索
-  const baseR = cfg.fallbackRadius || cfg.sparseRadius || 2000;
-  const radiusSteps = [1, 2, 4, 8, 16].map(f => baseR * f); // 例: 2km → 4 → 8 → 16 → 32km
-
-async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
-  const cfg = getSparseConfig();
-  if (!cfg.enabled) return existingPois;
-
-  // 累積距離・時間・エネルギーを用意
-  ensureRouteCums();
-  const rc = window.__routeCums;
-  if (!rc || !rc.cum || !rc.coords) return existingPois;
-
-  const { cum, coords } = rc;
   const totalD   = cum.D.at(-1) || 0;          // ルート全体[m]
   const triggerD = rest.routeD || 0;          // このトリガー[m]
   const triggerLL = L.latLng(rest.lat, rest.lon);
@@ -1768,6 +1721,7 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
   // before → after の順で返す（呼び出し側で poiLimit などで絞られる想定）
   return [...beforeList, ...afterList];
 }
+
 
 
 
@@ -2971,14 +2925,3 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
