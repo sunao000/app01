@@ -1303,6 +1303,38 @@ async function overpassQuery(query) {
   );
 }
 
+// overpassQuery に対する簡易リトライラッパ
+async function overpassRetry(query, maxRetry = 2){
+  let lastErr;
+  for (let i = 0; i <= maxRetry; i++){
+    try {
+      // 実体は overpassQuery
+      return await overpassQuery(query);
+    } catch (e){
+      lastErr = e;
+      const msg = String(e || '');
+
+      // 429 / ネットワーク系っぽい時だけ、少し待ってリトライ
+      const shouldRetry =
+        msg.includes('429') ||
+        msg.includes('Too Many Requests') ||
+        msg.includes('failed') ||
+        msg.includes('NetworkError');
+
+      if (i < maxRetry && shouldRetry){
+        const delay = 2000 * (i + 1);   // 2秒 → 4秒 と増やす
+        console.warn(`[OverpassRetry] retry ${i+1}/${maxRetry} after ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      // それ以外/リトライ上限超え → 諦める
+      break;
+    }
+  }
+  throw lastErr;
+}
+
+
 /* ===== POI取得（改良版）：カテゴリ自動拡張＋半径段階拡大＋距離ソート ===== */
 async function fetchPoisAround(latRaw, lonRaw, baseRadius, limit) {
   // --- 入力/前処理 ---
@@ -2925,3 +2957,4 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
