@@ -347,7 +347,7 @@ let restGroups = [];
 const ICON = c=>new L.Icon({iconUrl:`https://maps.gstatic.com/mapfiles/ms2/micons/${c}-dot.png`,iconSize:[32,32],iconAnchor:[16,32]});
 const ICONS = {start:ICON('green'),via:ICON('blue'),goal:ICON('red')};
 
-const OVERPASS_MIN_INTERVAL = 1800; // 1.8s（必要なら 2000～2500 まで上げてOK）
+const OVERPASS_MIN_INTERVAL = 3000; // 3.0s（必要なら 2000～2500 まで上げてOK）
 let __overpassLastTs = 0;
 const __overpassCache = new Map();  // key=query文字列, value=JSON
 
@@ -1240,6 +1240,19 @@ function buildEnergySeries(feature,mass,flat,byTime=true){
 
 /* ===== Overpass（保守的実装） ===== */
 async function overpassQuery(query) {
+  // ★ 1) まずキャッシュを確認（同じクエリはもう叩かない）
+  if (__overpassCache.has(query)) {
+    return __overpassCache.get(query);
+  }
+
+  // ★ 2) 最後に叩いた時刻から一定時間あける（レート制限）
+  const now = Date.now();
+  const wait = OVERPASS_MIN_INTERVAL - (now - __overpassLastTs);
+  if (wait > 0) {
+    await new Promise(r => setTimeout(r, wait));
+  }
+  __overpassLastTs = Date.now();
+
   const endpoints = [
     'https://overpass-api.de/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter'
@@ -1257,30 +1270,37 @@ async function overpassQuery(query) {
         body: new URLSearchParams({ data: query }).toString()
       });
       lastStatus = r.status;
-      if (r.ok) return r.json();
-      lastText = await r.text();
-      if (r.status === 400) {
-        console.warn('[Overpass] 400 detected.\n---QUERY START---\n' + query + '\n---QUERY END---\n' +
-                     '---RESPONSE START---\n' + lastText + '\n---RESPONSE END---');
+
+      if (r.ok) {
+        const json = await r.json();
+        __overpassCache.set(query, json);   // ★ 成功したらキャッシュに保存
+        return json;
       }
+
+      lastText = await r.text();
+
+      // 400 はクエリ構文ミスなので、ここで諦めて次の endpoint も叩かない
+      if (r.status === 400) {
+        console.warn('[Overpass] 400 detected.\n---QUERY START---\n' + query +
+                     '\n---QUERY END---\n---RESPONSE START---\n' + lastText +
+                     '\n---RESPONSE END---');
+        break;
+      }
+
+      // 429 など → ログ出して次の endpoint を試す
+      if (r.status === 429) {
+        console.warn('[Overpass] 429 Too Many Requests');
+      }
+
     } catch (e) {
       lastText = e.message || String(e);
     }
   }
-  throw new Error(`[Overpass] all attempts failed. Last status=${lastStatus}. Snippet=${(lastText||'').slice(0,1200)}`);
-}
-async function overpassRetry(query) {
-  let delay = 800;
-  for (let i=0;i<5;i++) {
-    try {
-      return await overpassQuery(query);
-    } catch (e) {
-      if (String(e).includes('status=400')) throw e; // 構文系は打ち切り
-      await new Promise(res=>setTimeout(res, delay));
-      delay = Math.min(6000, Math.round(delay*1.8));
-    }
-  }
-  return await overpassQuery(query);
+
+  throw new Error(
+    `[Overpass] all attempts failed. Last status=${lastStatus}. ` +
+    `Snippet=${(lastText||'').slice(0,400)}`
+  );
 }
 
 /* ===== POI取得（改良版）：カテゴリ自動拡張＋半径段階拡大＋距離ソート ===== */
@@ -1630,57 +1650,113 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
   const baseR = cfg.fallbackRadius || cfg.sparseRadius || 2000;
   const radiusSteps = [1, 2, 4, 8, 16].map(f => baseR * f); // 例: 2km → 4 → 8 → 16 → 32km
 
-  async function searchWithRadius(r){
-    // その時点で足りていない数だけを取りにいく
-    const needBefore = beforeON ? Math.max(0, 3 - beforeList.length) : 0;
-    const needAfter  = afterON  ? Math.max(0, 3 - afterList.length) : 0;
-    const needTotal  = needBefore + needAfter;
-    if (needTotal <= 0) return;
+async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
+  const cfg = getSparseConfig();
+  if (!cfg.enabled) return existingPois;
 
-    // トリガー地点を中心に検索
-    const found = await fetchPoisAroundStrict(rest.lat, rest.lon, r, needTotal * 4);
-    for (const po of found){
-      if (!po) continue;
-      const key = `${po.lat.toFixed(6)},${po.lon.toFixed(6)}`;
-      if (seen.has(key)) continue;
+  // 累積距離・時間・エネルギーを用意
+  ensureRouteCums();
+  const rc = window.__routeCums;
+  if (!rc || !rc.cum || !rc.coords) return existingPois;
 
-      po._proj = po._proj || projectToRoute(po.lat, po.lon, coords, cum);
-      po.distFromTriggerM = triggerLL.distanceTo([po.lat, po.lon]);
+  const { cum, coords } = rc;
+  const totalD   = cum.D.at(-1) || 0;          // ルート全体[m]
+  const triggerD = rest.routeD || 0;          // このトリガー[m]
+  const triggerLL = L.latLng(rest.lat, rest.lon);
 
-      if (po._proj.cumD < triggerD && beforeON && beforeList.length < 3){
-        po._side = 'before';
-        beforeList.push(po);
-        seen.add(key);
-      } else if (po._proj.cumD > triggerD && afterON && afterList.length < 3){
-        po._side = 'after';
-        afterList.push(po);
-        seen.add(key);
-      }
+  const beforeON = cfg.beforeON;
+  const afterON  = cfg.afterON;
 
-      // 両側とも目標数に達したら打ち切り
-      if ((!beforeON || beforeList.length >= 3) &&
-          (!afterON  || afterList.length  >= 3)){
+  const beforeList = [];
+  const afterList  = [];
+
+  // すでに見つかっている POI で重複チェック
+  const seen = new Set();
+
+  // まずは quick（既存）を side 別に振り分けておく
+  (existingPois || []).forEach(po => {
+    if (!po) return;
+    const key = `${po.lat.toFixed(6)},${po.lon.toFixed(6)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    po._proj = po._proj || projectToRoute(po.lat, po.lon, coords, cum);
+    po.distFromTriggerM = triggerLL.distanceTo([po.lat, po.lon]);
+
+    if (po._proj.cumD < triggerD && beforeON && beforeList.length < 3){
+      po._side = 'before';
+      beforeList.push(po);
+    } else if (po._proj.cumD > triggerD && afterON && afterList.length < 3){
+      po._side = 'after';
+      afterList.push(po);
+    }
+  });
+
+  // 基準半径（UIの「補完探索の半径」or 過疎判定半径）
+  const baseR = cfg.fallbackRadius || cfg.sparseRadius || 2000;
+  // サイドごとに最大3回まで半径を広げる（Overpass 叩きすぎ防止）
+  const radii = [baseR, baseR * 2, baseR * 4];  // 例: 2km → 4km → 8km
+
+  /**
+   * サイドごとの探索:
+   * label: 'before' | 'after'
+   * fromD〜toD の中点を中心に、半径を広げながら最低3件まで埋める
+   */
+  async function searchSide(label, fromD, toD){
+    const enabled = (label === 'before') ? beforeON : afterON;
+    if (!enabled) return;
+
+    const list = (label === 'before') ? beforeList : afterList;
+    if (list.length >= 3) return; // もう足りている
+
+    const segLen = Math.abs(toD - fromD);
+    if (!(Number.isFinite(segLen) && segLen > 0)) return;
+
+    // このサイドの「中間地点」の座標を取る
+    const midD = (fromD + toD) / 2;
+    const c = coordAtCumD(coords, cum, midD);
+
+    for (const r of radii){
+      if (list.length >= 3) break;
+
+      try{
+        // いま足りていない数だけ取得（余裕を見て x2）
+        const need = 3 - list.length;
+        const found = await fetchPoisAroundStrict(c.lat, c.lon, r, need * 2);
+
+        for (const po of found){
+          const key = `${po.lat.toFixed(6)},${po.lon.toFixed(6)}`;
+          if (seen.has(key)) continue;
+
+          seen.add(key);
+          po._proj = po._proj || projectToRoute(po.lat, po.lon, coords, cum);
+          po.distFromTriggerM = triggerLL.distanceTo([po.lat, po.lon]);
+          po._side = label;
+
+          list.push(po);
+          if (list.length >= 3) break;
+        }
+
+        logRest?.(
+          `[POI補完] #${triggerIndex+1} ${label}側 r=${r}m: 現在${list.length}件`
+        );
+
+      } catch (e){
+        logRest?.(
+          `[POI補完] #${triggerIndex+1} ${label}側 r=${r}m 取得失敗: ${e.message || e}`
+        );
+        // エラーが出たらそのサイドはこれ以上広げない
         break;
       }
     }
   }
 
-  for (const r of radiusSteps){
-    if ((beforeON && beforeList.length < 3) ||
-        (afterON  && afterList.length  < 3)){
-      try{
-        await searchWithRadius(r);
-      }catch(e){
-        logRest?.(
-          `[POI補完] #${triggerIndex+1} 半径${r}m 取得失敗: ${e.message || e}`
-        );
-      }
-    } else {
-      break; // もう十分取れたら終了
-    }
-  }
+  // スタート〜トリガー側から最低3件
+  await searchSide('before', 0, triggerD);
+  // トリガー〜ゴール側から最低3件
+  await searchSide('after',  triggerD, totalD);
 
-  // トリガーから近い順に並べる
+  // トリガー地点からの距離が近い順に並べ替え
   beforeList.sort((a,b)=>(a.distFromTriggerM||Infinity)-(b.distFromTriggerM||Infinity));
   afterList.sort((a,b)=>(a.distFromTriggerM||Infinity)-(b.distFromTriggerM||Infinity));
 
@@ -1689,8 +1765,10 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
     `スタート側 ${beforeList.length}件 / ゴール側 ${afterList.length}件`
   );
 
+  // before → after の順で返す（呼び出し側で poiLimit などで絞られる想定）
   return [...beforeList, ...afterList];
 }
+
 
 
 /* ===== トリガー単位：過疎判定 → 必要なら補完 → 結果のPOI配列を返す ===== */
@@ -2893,6 +2971,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
