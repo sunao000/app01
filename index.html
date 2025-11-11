@@ -58,7 +58,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   <summary>休憩地点まわりのPOI</summary>
   <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
     <label><input type="checkbox" id="poiToggle" checked> POI表示</label>
-    <label>初期半径 <input id="poiRadius" type="number" value="50000" min="50" step="50"> m</label>
+    <label>初期半径 <input id="poiRadius" type="number" value="1000" min="50" step="50"> m</label>
     <label>件数上限（近い順） <input id="poiLimit" type="number" value="5" min="1" step="1"> 件</label>
     <label><input type="checkbox" id="chkConvenience" checked> コンビニ</label>
     <label><input type="checkbox" id="chkSuper" checked> スーパー</label>
@@ -816,7 +816,7 @@ tEnd(tkRest, `hits=${rests.length}`);
 // POI検索（半径固定・近い順に n 件）
 // POI検索（「過疎判定＋補完」を先にやる版）
 if ($('poiToggle').checked) {
-  const baseRadius = Number($('poiRadius').value) || 50000;
+  const baseRadius = Number($('poiRadius').value) || 1000;
   const limit      = Math.max(1, Number($('poiLimit').value) || 5);
 
   for (let idx = 0; idx < rests.length; idx++) {
@@ -1532,7 +1532,7 @@ out center;`;
 
 /* ===== 休憩過疎補完用 設定取得 ===== */
 function getSparseConfig(){
-  const sparseRadius = Number($('sparseRadius')?.value) || 3000;
+  const sparseRadius = Number($('sparseRadius')?.value) || 1000;
   const sparseMin    = Number($('sparseMin')?.value) || 3;
   const enabled      = $('fallbackPoiToggle')?.checked ?? false;
   const beforeON     = $('fallbackBeforeToggle')?.checked ?? true;
@@ -1582,6 +1582,8 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
   const cfg = getSparseConfig();
   if (!cfg.enabled) return existingPois;
 
+  ensureRouteCums();
+  
   const rc = window.__routeCums;
   if (!rc || !rc.cum || !rc.coords) return existingPois;
 
@@ -2344,6 +2346,24 @@ function buildCums(feature, mass=75, flat=18){
   return {cum, coords};
 }
 
+// ★ ルートの累積距離/時間/エネルギーを一度だけ計算して共有する
+function ensureRouteCums(){
+  // すでに計算済みなら何もしない
+  if (window.__routeCums && window.__routeCums.cum) return;
+
+  const base = routeData.arterial || routeData.fastest;
+  if (!base) return;  // ルート未計算なら何もできない
+
+  const { cum, coords } = buildCums(base);
+  window.__routeCums = { cum, coords };
+  window.__cumTotals = {
+    D: cum.D.at(-1),
+    T: cum.T.at(-1),
+    E: cum.E.at(-1)
+  };
+}
+
+  
 // POIをルート折れ線へ射影し、その地点の累積値を内挿で取得
 function projectToRoute(lat,lon, coords, cum){
   let best={i0:0,i1:1,frac:0,dist:Infinity, stepIdx:1};
@@ -2599,35 +2619,31 @@ if (g?.rest && Number.isFinite(g.rest.routeD)) {
 
 function ensureProjections() {
   const base = routeData.arterial || routeData.fastest;
-  // ルート情報や休憩グループが存在しない場合は何もしない
   if (!base || !Array.isArray(restGroups) || !restGroups.length) return;
 
-  // ルート上の累積データを構築
-  const { cum, coords } = buildCums(base);
+  // ★ 累積の準備は共通ヘルパに任せる
+  ensureRouteCums();
+  const rc = window.__routeCums;
+  if (!rc || !rc.cum || !rc.coords) return;
 
-  window.__routeCums = { cum, coords };
-  window.__cumTotals = {
-    D: cum.D.at(-1),
-    T: cum.T.at(-1),
-    E: cum.E.at(-1)
-  };
+  const { cum, coords } = rc;
+
+  // __cumTotals は ensureRouteCums 側で作っている想定
+  // window.__cumTotals をここで触る必要がなければ何もしない
 
   // 各休憩グループの POI に射影データを付ける
   for (const g of restGroups) {
     const arr = g?.pois || [];
     for (const p of arr) {
       if (!p) continue;
-
-      // 既に _proj があり cumD が有限値ならスキップ
-      if (p._proj && Number.isFinite(p._proj.cumD)) continue;
-
-      // _proj を計算して付与
+      if (p._proj && Number.isFinite(p._proj.cumD)) continue; // 既に射影済みならスキップ
       p._proj = projectToRoute(p.lat, p.lon, coords, cum);
     }
   }
 
   console.log("[ensureProjections] 射影を再計算しました");
 }
+
 
 function dbgShowCumsAndProjections(){
   const el = $('dbgCums'); if (!el) return;
