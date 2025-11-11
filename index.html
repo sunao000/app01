@@ -1445,6 +1445,91 @@ out center;`;
   return picked;
 }
 
+/* ===== 過疎判定専用：半径を広げない POI 検索 ===== */
+async function fetchPoisAroundStrict(latRaw, lonRaw, radius, limit) {
+  const round6 = v => Math.round(Number(v) * 1e6) / 1e6;
+  const lat = round6(latRaw), lon = round6(lonRaw);
+  const centerLL = L.latLng(lat, lon);
+  const limitN = Math.max(1, Number(limit) || 5);
+
+  // ユーザのチェックボックス（コンビニ/スーパー/ドラッグ）
+  const useConvenience = document.getElementById('chkConvenience')?.checked ?? true;
+  const useSuper       = document.getElementById('chkSuper')?.checked ?? true;
+  const useDrug        = document.getElementById('chkDrug')?.checked ?? true;
+
+  const PRIMARY_TAGS = [];
+  if (useConvenience) PRIMARY_TAGS.push(['shop', 'convenience']);
+  if (useSuper)       PRIMARY_TAGS.push(['shop', 'supermarket']);
+  if (useDrug) {
+    PRIMARY_TAGS.push(['shop','chemist'], ['shop','pharmacy'], ['amenity','pharmacy']);
+  }
+
+  if (!PRIMARY_TAGS.length) return [];  // 何も選んでなければ0件
+
+  const buildQueryStrict = (tags, radius) => {
+    const grouped = {};
+    for (const [k, v] of tags) {
+      grouped[k] = grouped[k] || new Set();
+      grouped[k].add(v);
+    }
+    const clauses = [];
+    Object.entries(grouped).forEach(([k, set]) => {
+      const values = Array.from(set);
+      const re = '(' + values.map(v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')';
+      clauses.push(`node(around:${radius},${lat},${lon})["${k}"~"${re}"]`);
+      clauses.push(`way(around:${radius},${lat},${lon})["${k}"~"${re}"]`);
+    });
+
+    return `[out:json][timeout:25];
+(
+  ${clauses.join(';\n  ')};
+);
+out center;`;
+  };
+
+  const q = buildQueryStrict(PRIMARY_TAGS, radius);
+  let elements = [];
+  try {
+    const data = await overpassRetry(q);
+    elements = data.elements || [];
+  } catch (e) {
+    console.warn('[Overpass strict] error', e);
+    return [];
+  }
+
+  const results = [];
+  elements.forEach(e => {
+    const ll = e.type === 'node'
+      ? [e.lat, e.lon]
+      : (e.center ? [e.center.lat, e.center.lon] : null);
+    if (!ll) return;
+    const name = (e.tags && (e.tags['name:ja'] || e.tags.name || e.tags.brand)) || 'POI';
+    const dist = centerLL.distanceTo([ll[0], ll[1]]);
+    results.push({
+      name,
+      lat: ll[0],
+      lon: ll[1],
+      dist,
+      distFromTriggerM: dist,
+      distKm: dist / 1000
+    });
+  });
+
+  // 重複除去＋距離ソート
+  const seen = new Set();
+  const uniq = [];
+  for (const p of results) {
+    const key = `${p.name}|${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(p);
+  }
+
+  uniq.sort((a,b)=>a.dist-b.dist);
+  return uniq.slice(0, limitN);
+}
+
+
 /* ===== 休憩過疎補完用 設定取得 ===== */
 function getSparseConfig(){
   const sparseRadius = Number($('sparseRadius')?.value) || 3000;
@@ -1566,12 +1651,13 @@ async function resolvePoisForTrigger(idx, rest, baseRadius, limit){
   let pois = [];
   if (useSparse){
     const tkQuick = tStart(`POI_quick#${idx+1}`);
-    const quick = await fetchPoisAround(
-      rest.lat,
-      rest.lon,
-      cfg.sparseRadius,   // 過疎判定用の半径
-      cfg.sparseMin       // 過疎判定用の件数
-    );
+    const quick = await fetchPoisAroundStrict(
+  rest.lat,
+  rest.lon,
+  cfg.sparseRadius,   // 過疎判定用の半径（そのまま使う）
+  cfg.sparseMin       // 過疎判定用の件数
+);
+
     tEnd(tkQuick, `quick_found=${quick.length}`);
     logRest(`[SPARSECHK] ${(rest.routeD/1000).toFixed(2)} km: 半径${cfg.sparseRadius}m で ${quick.length}件（判定閾値 ${cfg.sparseMin}）`);
 
@@ -2732,6 +2818,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
