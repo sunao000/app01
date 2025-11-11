@@ -1595,44 +1595,65 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
     added.map(p => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`)
   );
 
-  async function searchSide(fromD, toD, maxCount, label){
-    if (maxCount <= 0) return;
+  // ★ 指定の累積距離[m]地点の座標を取るヘルパ（既存の coordAtCumD を利用）
+  //   coordAtCumD(rc.coords, rc.cum, d) をそのまま使います
+
+  // ★ 指定区間(fromD〜toD)について、
+  //    「最低 minCount 件見つかるまで半径を広げながら探索」する関数
+  async function searchSide(fromD, toD, minCount, label){
     const onKey = (label === 'before') ? 'beforeON' : 'afterON';
     if (!cfg[onKey]) return;
 
     const segLen = Math.abs(toD - fromD);
     if (!(Number.isFinite(segLen) && segLen > 0)) return;
 
-    const samples = 3;   // サンプリング点（必要ならUI化可）
-    let remain = maxCount;
+    const samples    = 3;                       // 区間内を3点サンプリング
+    const maxRadius  = 100000;                  // 最大半径 100km ※必要なら調整
+    let   radius     = cfg.fallbackRadius;      // UIで設定した半径から開始
+    let   collected  = 0;                       // この side で何件取れたか
 
-    for (let i=1; i<=samples && remain>0; i++){
-      const t = i/(samples+1);           // 1/4,2/4,3/4 のイメージ
-      const d = fromD + (toD-fromD)*t;   // 累積距離[m]
-      const c = coordAtCumD(rc.coords, rc.cum, d);
+    while (collected < minCount && radius <= maxRadius) {
+      for (let i = 1; i <= samples && collected < minCount; i++) {
+        const t = i / (samples + 1);            // 1/4, 2/4, 3/4 あたり
+        const d = fromD + (toD - fromD) * t;
+        const c = coordAtCumD(rc.coords, rc.cum, d);
 
-      try{
-        const extra = await fetchPoisAround(c.lat, c.lon, cfg.fallbackRadius, 3);
-        extra.forEach(po => {
-          const key = `${po.lat.toFixed(6)},${po.lon.toFixed(6)}`;
-          if (seen.has(key)) return;
-          seen.add(key);
-          po._fallbackFrom = label;  // before/after の出所メモ
-          added.push(po);
-          remain--;
-        });
-      }catch(e){
-        logRest?.(`[POI補完] #${triggerIndex+1} ${label}側サンプル取得失敗: ${e.message || e}`);
+        try{
+          // ★ 半径 radius で「その時点で足りない件数」だけ厳格検索
+          const need = minCount - collected;
+          const extra = await fetchPoisAroundStrict(c.lat, c.lon, radius, need);
+
+          extra.forEach(po => {
+            const key = `${po.lat.toFixed(6)},${po.lon.toFixed(6)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            po._fallbackFrom = label;          // before / after の出所メモ
+            added.push(po);
+            collected++;
+          });
+        }catch(e){
+          logRest?.(
+            `[POI補完] #${triggerIndex+1} ${label}側 r=${radius}m 取得失敗: ${e.message || e}`
+          );
+        }
       }
+
+      if (collected >= minCount) break;
+      radius *= 2;                              // ★ 足りなければ半径2倍に拡大
     }
+
+    logRest?.(
+      `[POI補完] #${triggerIndex+1} ${label}側 合計${collected}件` +
+      `（目標${minCount}件, 最終半径${Math.min(radius, maxRadius)}m）`
+    );
   }
 
-  // スタート〜トリガー側から最大3件
-  await searchSide(0, triggerD, 3, 'before');
-  // トリガー〜ゴール側から最大3件
-  await searchSide(triggerD, totalD, 3, 'after');
+  // ★ スタート〜トリガー側から「最低3件」見つかるまで探索
+  await searchSide(0,        triggerD, 3, 'before');
+  // ★ トリガー〜ゴール側から「最低3件」見つかるまで探索
+  await searchSide(triggerD, totalD,   3, 'after');
 
-  // 必要ならトリガーからの距離が近い順で軽くソート
+  // 一応トリガーからの距離が分かっていれば近い順に整える（無くても動く）
   added.sort((a,b)=>{
     const da = typeof a.distFromTriggerM === 'number' ? a.distFromTriggerM : Infinity;
     const db = typeof b.distFromTriggerM === 'number' ? b.distFromTriggerM : Infinity;
@@ -1642,44 +1663,55 @@ async function fallbackPoisForTrigger(triggerIndex, rest, existingPois){
   return added;
 }
 
+
 /* ===== トリガー単位：過疎判定 → 必要なら補完 → 結果のPOI配列を返す ===== */
 async function resolvePoisForTrigger(idx, rest, baseRadius, limit){
   const cfg = getSparseConfig();
   const useSparse = cfg.enabled;
 
-  // 過疎判定用：まず「狭い半径＆件数少なめ」でサッと検索
   let pois = [];
+
+  // ★ まず「過疎判定」から行う
   if (useSparse){
     const tkQuick = tStart(`POI_quick#${idx+1}`);
     const quick = await fetchPoisAroundStrict(
-  rest.lat,
-  rest.lon,
-  cfg.sparseRadius,   // 過疎判定用の半径（そのまま使う）
-  cfg.sparseMin       // 過疎判定用の件数
-);
-
+      rest.lat,
+      rest.lon,
+      cfg.sparseRadius,   // 過疎判定用の半径
+      cfg.sparseMin       // 過疎判定用の件数
+    );
     tEnd(tkQuick, `quick_found=${quick.length}`);
-    logRest(`[SPARSECHK] ${(rest.routeD/1000).toFixed(2)} km: 半径${cfg.sparseRadius}m で ${quick.length}件（判定閾値 ${cfg.sparseMin}）`);
 
-    // 過疎なら：クイック結果を初期値にして補完処理をかける
+    logRest(
+      `[SPARSECHK] ${(rest.routeD/1000).toFixed(2)} km: ` +
+      `半径${cfg.sparseRadius}m で ${quick.length}件（判定閾値 ${cfg.sparseMin}）`
+    );
+
+    // ▼▼ ここが重要：判定閾値未満なら「過疎」とみなし、通常検索に行かず補完だけ返す ▼▼
     if (quick.length < cfg.sparseMin){
       const tkFB = tStart(`POI_fallback#${idx+1}`);
       pois = await fallbackPoisForTrigger(idx, rest, quick);
       tEnd(tkFB, `after_fallback=${pois.length}`);
-      logRest(`  → 補完後: ${pois.length}件`);
-    }else{
-      // 過疎でないなら、そのまま quick 結果を使う
+
+      logRest(
+        `  → 補完後: ${pois.length}件（過疎として通常検索は行わない）`
+      );
+
+      // 必要なら上限 limit で切って返す
+      return pois.slice(0, limit);
+    } else {
+      // 過疎でない → quick の結果をそのまま初期値にする
       pois = quick;
     }
   }
 
-  // まだ limit に届いていなければ、通常のPOI検索で「盛る」
+  // ★ ここまで来たら「過疎ではない」か、機能OFF。
+  //    足りない分だけを通常のPOI検索で埋める。
   if (pois.length < limit){
     const tkMain = tStart(`POI_main#${idx+1}`);
     const more = await fetchPoisAround(rest.lat, rest.lon, baseRadius, limit);
     tEnd(tkMain, `main_found=${more.length}`);
 
-    // 重複を除いてマージ
     const seen = new Set(
       pois.map(p => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`)
     );
@@ -1693,7 +1725,6 @@ async function resolvePoisForTrigger(idx, rest, baseRadius, limit){
     logRest(`  → 通常検索マージ後: ${pois.length}件（上限 ${limit}）`);
   }
 
-  // 近い順にちょっと整える
   pois.sort((a,b)=>{
     const da = typeof a.distFromTriggerM === 'number' ? a.distFromTriggerM : Infinity;
     const db = typeof b.distFromTriggerM === 'number' ? b.distFromTriggerM : Infinity;
@@ -1702,6 +1733,7 @@ async function resolvePoisForTrigger(idx, rest, baseRadius, limit){
 
   return pois;
 }
+
 
 
 /* ===== 小ユーティリティ ===== */
@@ -2818,6 +2850,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
