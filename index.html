@@ -2914,29 +2914,54 @@ async function runAlgoDebugAll(){
   }
 
   const logEl = document.getElementById('dbgAlgoLog');
-  const log = (s)=>{ if(logEl) logEl.textContent += s + '\n'; };
+  if (logEl) logEl.textContent = 'アルゴリズム比較デバッグ実行中...\n';
 
-  window.__algoCompareRows = []; // 前回の結果をクリア
+  // 前回の結果をクリア
+  window.__algoCompareRows = [];
 
   const cumTotals = window.__cumTotals;
 
-  log('=== アルゴリズム比較デバッグ開始 ===');
-
-  // 1) 総当たり
-  log('[BRUTE] 実行中...');
-  const brute = await runAlgoWithMeasure('bruteforce','総当たり', ()=>debugBruteforceRunner(cumTotals));
-  log(`[BRUTE] 組合せ=${brute.list.length} 件, 時間=${brute.timeMs.toFixed(1)} ms, ORS=${brute.orsUsed} 回`);
+  // 1) 総当たり（ゼロAPI評価版）
+  const brute = await runAlgoWithMeasure(
+    'bruteforce',
+    '総当たり',
+    () => debugBruteforceRunner(cumTotals)
+  );
 
   // 2) ビームサーチ
-  log('[BEAM] 実行中...');
-  const beam = await runAlgoWithMeasure('beam','ビームサーチ', ()=>debugBeamRunner(cumTotals));
-  log(`[BEAM] 候補=${beam.list.length} 件, 時間=${beam.timeMs.toFixed(1)} ms, ORS=${beam.orsUsed} 回`);
+  const beam = await runAlgoWithMeasure(
+    'beam',
+    'ビームサーチ',
+    () => debugBeamRunner(cumTotals)
+  );
 
-  log('=== アルゴリズム比較デバッグ完了（CSVボタンから出力可能） ===');
+// ===== ここから「テキスト整形」部分 =====
+  const lines = [];
+  const fmt    = n => Number(n).toFixed(4);
+  const fmtKm  = n => Number(n).toFixed(2);
+  const fmtMin = n => Number(n).toFixed(2);
+  const fmtKJ  = n => Number(n).toFixed(1);
 
-  // 好きならここで一番良い候補をカード表示
-  // 例: showTop3Combos(beam.list);
-}
+  lines.push('====== アルゴリズム比較デバッグ ======');
+  lines.push('');
+
+  // 標準偏差が sigma に無ければ stats から計算
+  const safeSigma = (r) => {
+    const s = r.sigma || {};
+    const stats = r.stats || {};
+    const sd = (arr)=>{
+      if (!arr || !arr.length) return 0;
+      const m = arr.reduce((a,b)=>a+b,0)/arr.length;
+      const v = arr.reduce((a,x)=>a+(x-m)*(x-m),0)/arr.length;
+      return Math.sqrt(v);
+    };
+    return {
+      dist:   (typeof s.dist   === 'number') ? s.dist   : sd(stats.dist   || []),
+      time:   (typeof s.time   === 'number') ? s.time   : sd(stats.time   || []),
+      energy: (typeof s.energy === 'number') ? s.energy : sd(stats.energy || [])
+    };
+  };
+
 // ★ アルゴリズム比較結果をCSVダウンロード
 function downloadAlgoCompareCsv(){
   const rows = window.__algoCompareRows || [];
@@ -2993,8 +3018,60 @@ function downloadAlgoCompareCsv(){
   setTimeout(()=>URL.revokeObjectURL(url), 500);
 }
 
+  // 共通ブロック出力関数
+  function pushAlgoBlock(title, resultObj){
+    const list = resultObj.list || [];
+
+    lines.push(`--- ${title} ---`);
+    lines.push(`処理時間: ${resultObj.timeMs.toFixed(1)} ms`);
+    lines.push(`ORS呼び出し: ${resultObj.orsUsed} 回`);
+    lines.push(`Overpass呼び出し: ${resultObj.opUsed} 回`);
+    lines.push('');
+
+    list.slice(0, 3).forEach((r, idx)=>{
+      const rank = idx + 1;
+      const sig  = safeSigma(r);
+
+      lines.push(
+        `#${rank} score=${fmt(r.score)} ` +
+        `距離σ=${fmtKm(sig.dist)}km 時間σ=${fmtMin(sig.time)}分 エネσ=${fmtKJ(sig.energy)}kJ`
+      );
+
+      // 各トリガーごとの採用POI
+      (r.picksByTrigger || []).forEach((p, tIdx)=>{
+        if (!p) return;
+        const name = p.name || 'POI';
+        const lat  = Number(p.lat).toFixed(5);
+        const lon  = Number(p.lon).toFixed(5);
+        lines.push(`  - T${tIdx+1}: ${name} (${lat},${lon})`);
+      });
+
+      lines.push('');
+    });
+
+    lines.push('');
+  }
+
+  // ★ 表示順は「ビーム → 総当たり」
+  pushAlgoBlock('ビームサーチ（幅3・ゼロAPI）', beam);
+  pushAlgoBlock('総当たり（API多め・高精度）', brute);
+
+  // 画面の <pre id="dbgAlgoLog"> に表示
+  if (logEl) {
+    logEl.textContent = lines.join('\n');
+  }
+}
+  // どこか上の方（stddev が無ければ）に追加
+function algoStddev(arr){
+  if (!arr || !arr.length) return 0;
+  const m = arr.reduce((a,b)=>a+b,0) / arr.length;
+  const v = arr.reduce((s,x)=>s+(x-m)*(x-m),0) / arr.length;
+  return Math.sqrt(v);
+}
+
 </script>
 </body>
 </html>
+
 
 
