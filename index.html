@@ -1730,22 +1730,25 @@ function setComboMarkers(start, picksArray, goal){
 
 function showTop3Combos(resultList){
   const box = document.getElementById('comboTop3');
+  if (!box) return;
   box.innerHTML = '';
+
   // 直近の「探索: *」を拾って見出しに表示
-const last = [...PERF.rows].reverse().find(r=>String(r.name).startsWith('探索:'));
-if(last){
-  const note = document.createElement('div');
-  note.style.cssText='color:#555;margin-bottom:6px';
-  note.innerHTML = 探索時間: <b>${last.ms.toFixed(1)} ms</b> <small>(${last.name})</small>;
-  box.appendChild(note);
-}
+  const last = [...PERF.rows].reverse().find(r=>String(r.name).startsWith('探索:'));
+  if(last){
+    const note = document.createElement('div');
+    note.style.cssText='color:#555;margin-bottom:6px';
+    note.innerHTML = `探索時間: <b>${last.ms.toFixed(1)} ms</b> <small>(${last.name})</small>`;
+    box.appendChild(note);
+  }
 
   if (!resultList.length){
     box.textContent = '候補がありません（休憩トリガーやPOIが不足）';
     return;
   }
 
-  const sd = (a)=>{ if(!a.length) return 0;
+  const sd = (a)=>{ 
+    if(!a.length) return 0;
     const m=a.reduce((x,y)=>x+y,0)/a.length;
     return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/a.length);
   };
@@ -1762,38 +1765,39 @@ if(last){
 
     const header = document.createElement('div');
     const metric = getScoreMetric();
-const sig = {
-  dist: sd(r.stats.dist),
-  time: sd(r.stats.time),
-  energy: sd(r.stats.energy)
-};
-const metricLabel = (metric === 'time') ? '時間σ'
-                  : (metric === 'energy') ? 'エネルギーσ'
-                  : '距離σ';
-const metricValue = (metric === 'time') ? sig.time
-                   : (metric === 'energy') ? sig.energy
-                   : sig.dist;
+    const sig = {
+      dist: sd(r.stats.dist),
+      time: sd(r.stats.time),
+      energy: sd(r.stats.energy)
+    };
+    const metricLabel = (metric === 'time') ? '時間σ'
+                      : (metric === 'energy') ? 'エネルギーσ'
+                      : '距離σ';
+    const metricValue = (metric === 'time') ? sig.time
+                       : (metric === 'energy') ? sig.energy
+                       : sig.dist;
 
-header.innerHTML = 
-  <div style="font-weight:700;margin-bottom:4px">
-    #${rank}　スコア（${metricLabel}）: ${metricValue.toFixed(3)}
-    ${typeof r.rawScore === 'number'
-      ? <span style="color:#777">（総当たり: 補正後=${r.score.toFixed(3)} / 素=${r.rawScore.toFixed(3)}）</span>
-      : ''
+    let extra = '';
+    if (typeof r.rawScore === 'number') {
+      extra = `<span style="color:#777">（総当たり: 補正後=${r.score.toFixed(3)} / 素=${r.rawScore.toFixed(3)}）</span>`;
     }
-  </div>
-  <div style="margin-top:4px">
-    距離σ=${sig.dist.toFixed(2)} km　
-    時間σ=${sig.time.toFixed(2)} 分　
-    エネルギーσ=${sig.energy.toFixed(2)} kJ
-  </div>
-;
 
+    header.innerHTML = `
+      <div style="font-weight:700;margin-bottom:4px">
+        #${rank}　スコア（${metricLabel}）: ${metricValue.toFixed(3)}
+        ${extra}
+      </div>
+      <div style="margin-top:4px">
+        距離σ=${sig.dist.toFixed(2)} km　
+        時間σ=${sig.time.toFixed(2)} 分　
+        エネルギーσ=${sig.energy.toFixed(2)} kJ
+      </div>
+    `;
     wrap.appendChild(header);
 
     const list = document.createElement('div');
     list.style.marginTop = '8px';
-    list.innerHTML = <div style="font-weight:600;margin-bottom:4px">採用した休憩地点（トリガーごと）</div>;
+    list.innerHTML = `<div style="font-weight:600;margin-bottom:4px">採用した休憩地点（トリガーごと）</div>`;
     const ol = document.createElement('ol');
     ol.style.margin = '4px 0 0 1.1rem';
     ol.style.fontSize = '0.92rem';
@@ -1803,15 +1807,17 @@ header.innerHTML =
       const km = ((g?.rest?.routeD || 0) / 1000).toFixed(2);
       const head = document.createElement('div');
       head.innerHTML = `
-  <b>休憩トリガー＃${i+1}</b>
-  <span style="color:#666">${km.toFixed(2)} km地点</span>
-  <small>(${(g.rest?.lat ?? 0).toFixed(5)}, ${(g.rest?.lon ?? 0).toFixed(5)})</small>
-`;
+        <b>休憩トリガー＃${i+1}</b>
+        <span style="color:#666">${km} km地点</span>
+        <small>(${(g.rest?.lat ?? 0).toFixed(5)}, ${(g.rest?.lon ?? 0).toFixed(5)})</small>
+      `;
       li.appendChild(head);
 
       const chosen = (r.picksByTrigger && r.picksByTrigger[i]) ? r.picksByTrigger[i] : null;
       const ul = document.createElement('ul');
-      ul.style.listStyle='none'; ul.style.margin='4px 0 0'; ul.style.padding='0';
+      ul.style.listStyle='none';
+      ul.style.margin='4px 0 0';
+      ul.style.padding='0';
 
       const row = document.createElement('li');
       row.style.padding='2px 0';
@@ -1819,19 +1825,19 @@ header.innerHTML =
       if (chosen){
         row.style.cursor='pointer';
         const dtxt = (typeof chosen.distFromTriggerM === 'number')
-          ?  / ${formatDist(chosen.distFromTriggerM)}
-            : '';
-        row.textContent = ・${chosen.name}　${fmt(chosen.lat)}　${fmt(chosen.lon)}${dtxt};
+          ? ` / ${formatDist(chosen.distFromTriggerM)}`
+          : '';
+        row.textContent = `・${chosen.name}　${fmt(chosen.lat)}　${fmt(chosen.lon)}${dtxt}`;
         row.onclick = () => {
           map.flyTo([chosen.lat, chosen.lon], 17);
           L.popup().setLatLng([chosen.lat, chosen.lon]).setContent(chosen.name).openOn(map);
         };
       } else {
-  // 候補が一件も無いのか、単にその組み合わせで未採用なのかを判定
-  const hasAny = Array.isArray(g?.pois) && g.pois.length > 0;
-  row.textContent = hasAny ? '・（未採用）' : '・（候補なし）';
-  row.style.color = '#777';
-}
+        // 候補が一件も無いのか、単にその組み合わせで未採用なのかを判定
+        const hasAny = Array.isArray(g?.pois) && g.pois.length > 0;
+        row.textContent = hasAny ? '・（未採用）' : '・（候補なし）';
+        row.style.color = '#777';
+      }
 
       ul.appendChild(row);
       li.appendChild(ul);
@@ -1853,16 +1859,24 @@ header.innerHTML =
         if (!feature) {
           const start = pts.find(p=>p.type==='start') || pts[0];
           const goal  = pts.find(p=>p.type==='goal')  || pts[pts.length-1];
-          if (!start || !goal) { alert('スタート/ゴールが見つかりません。'); return; }
+          if (!start || !goal) {
+            alert('スタート/ゴールが見つかりません。');
+            return;
+          }
           const picksArray = (r.picksByTrigger && Array.isArray(r.picksByTrigger))
             ? r.picksByTrigger.filter(Boolean)
             : (r.picks || []);
-          const wps = [start, ...picksArray, goal].map(p=>({lat:p.lat, lon:p.lon, name:p.name || 'POI'}));
+          const wps = [start, ...picksArray, goal].map(p=>({
+            lat:p.lat, lon:p.lon, name:p.name || 'POI'
+          }));
           const profile = $('profileSelect').value;
           const out = await routeLegStatsForWaypoints(wps, profile);
           feature = out.feature;
         }
-        if (!feature) { alert('ルートを生成できませんでした。'); return; }
+        if (!feature) {
+          alert('ルートを生成できませんでした。');
+          return;
+        }
 
         clearRouteLayers();
         const color = '#00aa88';
@@ -1884,14 +1898,14 @@ header.innerHTML =
         }
         setActiveButton(null);
       } catch (e){
-  console.error(e);
-  const hints = [
-    !ORS_KEY ? 'ORS_KEY が未設定' : null,
-    !(pts && pts.length>=2) ? 'Start/Goal が不正' : null,
-    !routeData.fastest ? '最速ルート未生成（先に「休憩場所検索」を実行）' : null
-  ].filter(Boolean).join(' / ');
-  alert('ルート描画でエラー: ' + (e.message || e) + (hints ? '\nヒント: ' + hints : ''));
-} finally {
+        console.error(e);
+        const hints = [
+          !ORS_KEY ? 'ORS_KEY が未設定' : null,
+          !(pts && pts.length>=2) ? 'Start/Goal が不正' : null,
+          !routeData.fastest ? '最速ルート未生成（先に「休憩場所検索」を実行）' : null
+        ].filter(Boolean).join(' / ');
+        alert('ルート描画でエラー: ' + (e.message || e) + (hints ? '\nヒント: ' + hints : ''));
+      } finally {
         btn.disabled = false;
         btn.textContent = 'このルートを表示';
       }
@@ -1902,6 +1916,7 @@ header.innerHTML =
     box.appendChild(wrap);
   });
 }
+
 
 /* ===== スコアリング（POI評価） ===== */
 // ローカルストレージから復元（無ければデフォルト）
@@ -2739,6 +2754,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
