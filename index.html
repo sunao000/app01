@@ -353,25 +353,27 @@ function updateAlgoPerfSummary(algoCode){
   const box = $('algoPerfSummary');
   if (!box) return;
 
-  const targetName = 探索: ${algoCode};
+  const targetName = `探索: ${algoCode}`;
   const rows = [...PERF.rows].reverse();
   const row = rows.find(r => r.name === targetName);
-  const msText = row ? ${row.ms.toFixed(1)} ms : '不明';
+  const msText = row ? `${row.ms.toFixed(1)} ms` : '不明';
 
-  const ors  = API_USED.lastSolveOrs;
-  const ovp  = API_USED.lastSolveOverpass;
+  const ors = API_USED.lastSolveOrs;
+  const ovp = API_USED.lastSolveOverpass;
 
-  box.innerHTML =
-    アルゴリズム: <b>${algoLabel(algoCode)}</b><br> +
-    処理時間: <b>${msText}</b><br> +
-    この探索で使用した ORS Directions API: <b>${ors} 回</b><br> +
-    この探索で使用した Overpass API: <b>${ovp} 回</b><br> +
+  box.innerHTML = `
+    アルゴリズム: <b>${algoLabel(algoCode)}</b><br>
+    処理時間: <b>${msText}</b><br>
+    この探索で使用した ORS Directions API: <b>${ors} 回</b><br>
+    この探索で使用した Overpass API: <b>${ovp} 回</b><br>
     <small style="color:#777">
       ※実際の API 残りクォータは OpenRouteService / Overpass の
       アカウント設定に依存します。このツールでは「このページを開いてから
       何回呼んだか」の概算のみを表示しています。
-    </small>;
+    </small>
+  `;
 }
+
 
 
 
@@ -2615,5 +2617,6 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
