@@ -726,23 +726,26 @@ function drawList(){
 
 /* ====== 検索処理（候補表示対応版） ====== */
 async function nomSearch(q){
-  const url=https://nominatim.openstreetmap.org/search?format=json&limit=10&q=${encodeURIComponent(q)};
-  const arr=await (await fetch(url)).json();
-  const sug=$('searchSuggestions');
-  sug.innerHTML='';
-  if(!arr.length){alert('見つかりません');return;}
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=10&q=${encodeURIComponent(q)}`;
+  const arr = await (await fetch(url)).json();
+  const sug = $('searchSuggestions');
+  sug.innerHTML = '';
+  if (!arr.length) {
+    alert('見つかりません');
+    return;
+  }
   // 候補をリスト表示
   arr.forEach(o=>{
-    const li=document.createElement('li');
-    li.textContent=o.display_name;
-    li.style.cursor='pointer';
-    li.style.padding='4px';
-    li.onmouseenter=()=>li.style.background='#eee';
-    li.onmouseleave=()=>li.style.background='';
-    li.onclick=()=>{
-      addPoint({name:o.display_name,lat:+o.lat,lon:+o.lon});
-      sug.innerHTML=''; // クリック後クリア
-      $('placeInput').value='';
+    const li = document.createElement('li');
+    li.textContent = o.display_name;
+    li.style.cursor = 'pointer';
+    li.style.padding = '4px';
+    li.onmouseenter = () => li.style.background = '#eee';
+    li.onmouseleave = () => li.style.background = '';
+    li.onclick = () => {
+      addPoint({name:o.display_name, lat:+o.lat, lon:+o.lon});
+      sug.innerHTML = ''; // クリック後クリア
+      $('placeInput').value = '';
     };
     sug.appendChild(li);
   });
@@ -750,45 +753,64 @@ async function nomSearch(q){
 
 
 /* ====== ORS ====== */
-async function post(url,body){
-  const r=await fetch(url,{
+async function post(url, body){
+  const r = await fetch(url, {
     method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':ORS_KEY},
+    headers:{
+      'Content-Type':'application/json',
+      'Authorization': ORS_KEY
+    },
     body:JSON.stringify(body)
   });
-  if(!r.ok) throw new Error(r.status);
+  if (!r.ok) throw new Error(r.status);
   return r.json();
 }
-async function dir(body,profile){
-  const wait=1100-(Date.now()-lastDirTs); 
-  if(wait>0) await new Promise(r=>setTimeout(r,wait));
+
+async function dir(body, profile){
+  const wait = 1100 - (Date.now() - lastDirTs); 
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
 
   // ★ ORS 呼び出し回数カウント
   API_USED.orsTotal++;
 
-  const d=await post(${ORS_ROOT}/v2/directions/${profile}/geojson,body);
-  lastDirTs=Date.now();
+  const d = await post(`${ORS_ROOT}/v2/directions/${profile}/geojson`, body);
+  lastDirTs = Date.now();
   return d;
 }
 
 
 /* ====== ルート表示関連 ====== */
 function clearRouteLayers(){
-  Object.values(routeLayers).forEach(l=>{ if(l) map.removeLayer(l); });
-  routeLayers={};
+  Object.values(routeLayers).forEach(l => { if (l) map.removeLayer(l); });
+  routeLayers = {};
 }
+
 function setActiveButton(btn){
-  document.querySelectorAll('#routeButtons button').forEach(b=>b.classList.remove('active'));
-  if(btn) btn.classList.add('active');
+  document.querySelectorAll('#routeButtons button').forEach(
+    b => b.classList.remove('active')
+  );
+  if (btn) btn.classList.add('active');
 }
+
 function showSingleRoute(type, noFit){
   clearRouteLayers();
-  const colorMap = { shortest:'#ff0000', fastest:'#0066ff', slope:'#ff9900', arterial:'#00b26b' };
+  const colorMap = {
+    shortest:'#ff0000',
+    fastest :'#0066ff',
+    slope   :'#ff9900',
+    arterial:'#00b26b'
+  };
   const f = routeData[type];
-  if(!f){ alert('まだ計算していません'); return; }
-  routeLayers[type] = L.geoJSON(f, { style:{ color: colorMap[type], weight: 6 } }).addTo(map);
-  if(!noFit) map.fitBounds(routeLayers[type].getBounds().pad(0.1));
+  if (!f){
+    alert('まだ計算していません');
+    return;
+  }
+  routeLayers[type] = L.geoJSON(f, {
+    style:{ color: colorMap[type], weight: 6 }
+  }).addTo(map);
+  if (!noFit) map.fitBounds(routeLayers[type].getBounds().pad(0.1));
 }
+
 function toggleSingleRoute(type, btn){
   showSingleRoute(type);
   setActiveButton(btn);
@@ -796,45 +818,67 @@ function toggleSingleRoute(type, btn){
 
 /* ====== ルート計算・休憩・POI ====== */
 async function drawRoutes(){
-  if(pts.length<2){alert('2地点以上登録してください');return;}
+  if (pts.length < 2){
+    alert('2地点以上登録してください');
+    return;
+  }
 
   clearRouteLayers();
-  if(markerLayer) map.removeLayer(markerLayer);
+  if (markerLayer) map.removeLayer(markerLayer);
 
-  markerLayer=L.layerGroup().addTo(map);
+  markerLayer = L.layerGroup().addTo(map);
   
-  pts.forEach(p=>markerLayer.addLayer(L.marker([p.lat,p.lon],{icon:ICONS[p.type||'via']}).bindTooltip(p.name)));
+  pts.forEach(p =>
+    markerLayer.addLayer(
+      L.marker([p.lat,p.lon], {icon:ICONS[p.type || 'via']}).bindTooltip(p.name)
+    )
+  );
 
-  const coords=pts.map(p=>[p.lon,p.lat]);
+  const coords  = pts.map(p => [p.lon, p.lat]);
   const profile = $('profileSelect').value;
-  const base={coordinates:coords,elevation:true,extra_info:['steepness']};
+  const base    = {coordinates:coords, elevation:true, extra_info:['steepness']};
 
   try{
     const tkORS = tStart('ORS: 最短/最速');
-const shortest = await dir({...base, preference:'shortest'}, profile);
-const fastest  = await dir({...base, preference:'fastest'},  profile);
-tEnd(tkORS, pts=${pts.length});
+    const shortest = await dir({ ...base, preference:'shortest' }, profile);
+    const fastest  = await dir({ ...base, preference:'fastest'  }, profile);
+    tEnd(tkORS, `pts=${pts.length}`);
 
-
-    let slope = shortest.features[0];
+    let slope    = shortest.features[0];
     let arterial = fastest.features[0];
-    if(coords.length===2){
+
+    if (coords.length === 2){
       const tkAlt = tStart('ORS: 代替経路');
-const alt = await dir({...base, preference:'shortest',
-  alternative_routes:{target_count:3,share_factor:0.6,weight_factor:1.4}}, profile);
-tEnd(tkAlt, alts=${(alt.features||[]).length});
+      const alt = await dir({
+        ...base,
+        preference:'shortest',
+        alternative_routes:{
+          target_count:3,
+          share_factor:0.6,
+          weight_factor:1.4
+        }
+      }, profile);
+      tEnd(tkAlt, `alts=${(alt.features || []).length}`);
 
       const feats = alt.features || [];
-      if(feats.length){
+      if (feats.length){
         function steepSum(f){
-          const vals=((f.properties||{}).extras||{}).steepness?.values||[];
-          let s=0; for(const v of vals){ s+=Math.abs(v[2]||0); }
+          const vals = ((f.properties || {}).extras || {}).steepness?.values || [];
+          let s = 0;
+          for (const v of vals){
+            s += Math.abs(v[2] || 0);
+          }
           return s;
         }
-        slope = feats.reduce((a,b)=> steepSum(a)<steepSum(b)?a:b);
+
+        slope = feats.reduce((a,b)=> steepSum(a) < steepSum(b) ? a : b);
+
         // 幹線優先（代替経路＋fastest の中からスコア最大）
         arterial = feats.concat(fastest.features || [])
-        .reduce((best,cand)=> arterialScore(cand) > arterialScore(best) ? cand : best, arterial);
+          .reduce((best,cand) =>
+            arterialScore(cand) > arterialScore(best) ? cand : best,
+            arterial
+          );
       }
     }
 
@@ -846,39 +890,54 @@ tEnd(tkAlt, alts=${(alt.features||[]).length});
     const s1 = routeData.shortest.properties.summary;
     const s2 = routeData.fastest.properties.summary;
     const s3 = routeData.slope.properties.summary;
-    $('routeInfo').innerHTML =
-      <b>最短</b> ${formatDist(s1.distance)} / ${formatDur(s1.duration)}<br>+
-      <b>最速</b> ${formatDist(s2.distance)} / ${formatDur(s2.duration)}<br>+
-      <b>勾配</b> ${formatDist(s3.distance)} / ${formatDur(s3.duration)}<br>+
-      (routeData.arterial ? <b>幹線</b> ${formatDist(routeData.arterial.properties.summary.distance)} / ${formatDur(routeData.arterial.properties.summary.duration)} : '');
-    $('distanceScore').textContent = '距離差（最速-最短）: '+(s2.distance - s1.distance).toFixed(0)+' m';
+
+    $('routeInfo').innerHTML = `
+      <b>最短</b> ${formatDist(s1.distance)} / ${formatDur(s1.duration)}<br>
+      <b>最速</b> ${formatDist(s2.distance)} / ${formatDur(s2.duration)}<br>
+      <b>勾配</b> ${formatDist(s3.distance)} / ${formatDur(s3.duration)}<br>
+      ${routeData.arterial
+        ? `<b>幹線</b> ${formatDist(routeData.arterial.properties.summary.distance)} / ${formatDur(routeData.arterial.properties.summary.duration)}`
+        : ''
+      }
+    `;
+
+    $('distanceScore').textContent =
+      '距離差（最速-最短）: ' + (s2.distance - s1.distance).toFixed(0) + ' m';
 
     /* ===== 休憩地点挿入 ===== */
     const mass = 75; // 体重+バイク質量(例)
     const flat = 18; // 平坦係数
     const baseFeature = routeData.arterial || routeData.fastest;
+
     const tkRest = tStart('休憩トリガ生成');
-const rests = await makeRestPoints(baseFeature, mass, flat);
-tEnd(tkRest, hits=${rests.length});
+    const rests = await makeRestPoints(baseFeature, mass, flat);
+    tEnd(tkRest, `hits=${rests.length}`);
 
+    restGroups = (rests || []).map(r => ({ rest:r, pois:[] }));
+    restList   = []; // 前回のリストをリセット
 
-    restGroups = (rests || []).map(r => ({ rest: r, pois: [] }));
-
-    restList = []; // 前回のリストをリセット
-
-    if (rests.length) {
+    if (rests.length){
       // リストに挿入（ゴール直前）
-     rests.forEach(r => {
-       pts.splice(pts.length-1, 0,
-                  { name:'休憩', lat:r.lat, lon:r.lon, type:'via', isRest:true });
-        // ▼ r が有効なスコープ内で push
-        restList.push({distance:(r.routeD/1000).toFixed(2), lat:r.lat, lon:r.lon});
+      rests.forEach(r => {
+        pts.splice(pts.length-1, 0, {
+          name:'休憩',
+          lat:r.lat,
+          lon:r.lon,
+          type:'via',
+          isRest:true
+        });
+        restList.push({
+          distance:(r.routeD / 1000).toFixed(2),
+          lat:r.lat,
+          lon:r.lon
+        });
       });
+
       drawList();
       updateRestListPanel(); // 休憩地点リスト表示更新
 
       // 休憩マーカー
-      for (const r of rests) {
+      for (const r of rests){
         L.marker([r.lat, r.lon], {
           icon: new L.Icon({
             iconUrl: 'https://maps.gstatic.com/mapfiles/ms2/micons/yellow-dot.png',
@@ -889,57 +948,70 @@ tEnd(tkRest, hits=${rests.length});
       }
 
       // POI検索（半径固定・近い順に n 件）
-if ($('poiToggle').checked) {
-  const baseRadius = Number($('poiRadius').value) || 50000;
-  const limit = Math.max(1, Number($('poiLimit').value) || 5);
-  // ★ ここで今回の休憩場所検索開始時点のカウントを記録
-  const overpassBefore = OVERPASS_CALL_TOTAL;
+      if ($('poiToggle').checked){
+        const baseRadius = Number($('poiRadius').value) || 50000;
+        const limit      = Math.max(1, Number($('poiLimit').value) || 5);
 
-  for (let idx = 0; idx < rests.length; idx++) {
-    const r = rests[idx];
-    try {
-      const tkPOI = tStart(POI#${idx+1});
-const pois = await fetchPoisAround(r.lat, r.lon, baseRadius, limit);
-tEnd(tkPOI, found=${pois.length});
+        // ★ ここで今回の休憩場所検索開始時点のカウントを記録
+        const overpassBefore = OVERPASS_CALL_TOTAL;
 
-      logRest([POI] ${(r.routeD / 1000).toFixed(2)} km: 半径${baseRadius}m → ${pois.length}件（近い順）);
+        for (let idx = 0; idx < rests.length; idx++){
+          const r = rests[idx];
+          try {
+            const tkPOI = tStart(`POI#${idx+1}`);
+            const pois = await fetchPoisAround(r.lat, r.lon, baseRadius, limit);
+            tEnd(tkPOI, `found=${pois.length}`);
 
-      // ▼ 追加：この休憩トリガーのPOIを保存
-      if (restGroups[idx]) {
-        restGroups[idx].pois = pois.map(p => ({ ...p, triggerIndex: idx }));
+            logRest(
+              `[POI] ${(r.routeD / 1000).toFixed(2)} km: 半径${baseRadius}m → ${pois.length}件（近い順）`
+            );
+
+            // ▼ この休憩トリガーのPOIを保存
+            if (restGroups[idx]) {
+              restGroups[idx].pois = pois.map(p => ({ ...p, triggerIndex: idx }));
+            }
+              
+            // 既存：マップに描画
+            pois.forEach(po => {
+              L.marker([po.lat, po.lon], {
+                icon: new L.Icon({
+                  iconUrl: 'https://maps.gstatic.com/mapfiles/ms2/micons/purple.png',
+                  iconSize: [24, 24],
+                  iconAnchor: [12, 24]
+                })
+              }).bindTooltip(
+                `${po.name}${
+                  typeof po.distFromTriggerM === 'number'
+                    ? ` (${formatDist(po.distFromTriggerM)})`
+                    : ''
+                }`
+              ).addTo(markerLayer);
+            });
+          } catch (e){
+            logRest(
+              `[POI] ${(r.routeD / 1000).toFixed(2)} km: 取得失敗`
+            );
+          }
+        }
+
+        // ▼ 追加：パネルへ反映
+        ensureProjections();
+        updateRestPoiPanel();
+
+        // ★ ここで今回使った回数と累計を「最後の行」として出す
+        const usedThisTime = OVERPASS_CALL_TOTAL - overpassBefore;
+        logRest(
+          `--- Overpass API 呼び出し: 今回 ${usedThisTime} 回 / 累計 ${OVERPASS_CALL_TOTAL} 回 ---`
+        );
       }
-        
-      // 既存：マップに描画
-      pois.forEach(po => {
-        L.marker([po.lat, po.lon], {
-          icon: new L.Icon({
-            iconUrl: 'https://maps.gstatic.com/mapfiles/ms2/micons/purple.png',
-            iconSize: [24, 24],
-            iconAnchor: [12, 24]
-          })
-        }).bindTooltip(${po.name}${typeof po.distFromTriggerM === 'number' ?  (${formatDist(po.distFromTriggerM)}) : ''}).addTo(markerLayer);
-      });
-    } catch (e) {
-      logRest([POI] ${(r.routeD / 1000).toFixed(2)} km: 取得失敗);
-    }
-  }
-
-  // ▼ 追加：パネルへ反映
-  ensureProjections();
-  updateRestPoiPanel();
-  // ★ ここで今回使った回数と累計を「最後の行」として出す
-  const usedThisTime = OVERPASS_CALL_TOTAL - overpassBefore;
-  logRest(--- Overpass API 呼び出し: 今回 ${usedThisTime} 回 / 累計 ${OVERPASS_CALL_TOTAL} 回 ---);
-  
-}
-
     }
 
-// デフォルト表示は幹線優先（なければ最速）
-const prefer = routeData.arterial ? 'arterial' : 'fastest';
-showSingleRoute(prefer, true);
-setActiveButton(prefer === 'arterial' ? $('btnShowArterial') : $('btnShowFastest'));
-
+    // デフォルト表示は幹線優先（なければ最速）
+    const prefer = routeData.arterial ? 'arterial' : 'fastest';
+    showSingleRoute(prefer, true);
+    setActiveButton(
+      prefer === 'arterial' ? $('btnShowArterial') : $('btnShowFastest')
+    );
 
     // 区間統計を表示
     await showRouteLegSummary();
@@ -948,11 +1020,12 @@ setActiveButton(prefer === 'arterial' ? $('btnShowArterial') : $('btnShowFastest
     $('btnDownloadTime').disabled = false;
     $('btnDownloadDist').disabled = false;
 
-  }catch(e){
+  } catch(e){
     console.error(e);
-    alert('ルート取得失敗: '+e.message);
+    alert('ルート取得失敗: ' + e.message);
   }
 }
+
 
 /* ===== 休憩トリガー関連 ===== */
 function logRest(msg){ $('restDebug').textContent += msg + "\n"; }
@@ -2635,6 +2708,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
