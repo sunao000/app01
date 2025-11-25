@@ -3009,21 +3009,30 @@ async function runAlgoDebugAll(){
 
   // 前回の結果をクリア
   window.__algoCompareRows = [];
-
   const cumTotals = window.__cumTotals;
 
-  // 1) 総当たり（ゼロAPI評価版）
-  const brute = await runAlgoWithMeasure(
-    'bruteforce',
-    '総当たり',
-    () => debugBruteforceRunner(cumTotals)
+  // 0) 直線距離
+  const linear = await runAlgoWithMeasure(
+    'linear', '直線距離（全組合せ・近似）',
+    () => debugLinearRunner(cumTotals)
   );
 
-  // 2) ビームサーチ
+  // 1) ビームサーチ
   const beam = await runAlgoWithMeasure(
-    'beam',
-    'ビームサーチ',
+    'beam', 'ビームサーチ',
     () => debugBeamRunner(cumTotals)
+  );
+
+  // 2) 総当たり（K=3）
+  const bruteK3 = await runAlgoWithMeasure(
+    'bruteforceK3', '総当たり（K=3）',
+    () => debugBruteforceRunnerK3(cumTotals)
+  );
+
+  // 3) 総当たり（K=5 = 従来版）
+  const bruteK5 = await runAlgoWithMeasure(
+    'bruteforce', '総当たり（K=5・制限少）',
+    () => debugBruteforceRunner(cumTotals)
   );
 
   // ===== ここから「テキスト整形」部分 =====
@@ -3084,8 +3093,11 @@ async function runAlgoDebugAll(){
   }
 
   // ★ 表示順は「ビーム → 総当たり」
-  pushAlgoBlock('ビームサーチ（幅3・ゼロAPI）', beam);
-  pushAlgoBlock('総当たり（API多め・高精度）', brute);
+  pushAlgoBlock('直線距離（全組合せ・近似）', linear);
+pushAlgoBlock('ビームサーチ（幅3・ゼロAPI）', beam);
+pushAlgoBlock('総当たり（K=3）', bruteK3);
+pushAlgoBlock('総当たり（K=5・制限少）', bruteK5);
+
 
   // 画面の <pre id="dbgAlgoLog"> に表示
   if (logEl) {
@@ -3093,6 +3105,44 @@ async function runAlgoDebugAll(){
   }
 }
 
+// ★ 総当たり（K=3）デバッグランナー
+async function debugBruteforceRunnerK3(cumTotals){
+  const K = 3;  
+
+  const candGroups = greedyTopKCandidates(restGroups, cumTotals, K);
+  const combos = enumerateCombinations(candGroups, K, /*hardCap=*/30);
+
+  const { start, goal } = getStartGoalPoints();
+  const profile = document.getElementById('profileSelect')?.value || 'cycling-road';
+
+  const results = [];
+
+  for (const cmb of combos){
+    const picks = cmb.filter(Boolean);
+    const wps = [start, ...picks, goal].map(p => ({
+      lat: p.lat, lon: p.lon, name: p.name || 'POI'
+    }));
+
+    try{
+      const { feature, stats } = await routeLegStatsForWaypoints(wps, profile);
+      const score = comboScore(stats);
+
+      results.push({
+        picksByTrigger: cmb,
+        picks,
+        stats,
+        score
+      });
+    }catch(e){
+      console.warn('debugBruteforceRunnerK3: 1コンボ失敗', e);
+    }
+  }
+
+  return results;
+}
+
+  
 </script>
 </body>
 </html>
+
