@@ -1508,13 +1508,13 @@ async function fetchPoisAround(latRaw, lonRaw, baseRadius, limit) {
       // vending_machine は補助属性 vending=drinks にも対応
       if (k === 'amenity' && values.includes('vending_machine')) {
         clauses.push(`node(around:${radius},${lat},${lon})["amenity"="vending_machine"]`);
-        clauses.push(way(around:${radius},${lat},${lon})["amenity"="vending_machine"]);
-        clauses.push(node(around:${radius},${lat},${lon})["vending"~"(drinks|beverages)"]);
-        clauses.push(way(around:${radius},${lat},${lon})["vending"~"(drinks|beverages)"]);
+        clauses.push(`way(around:${radius},${lat},${lon})["amenity"="vending_machine"]`);
+        clauses.push(`node(around:${radius},${lat},${lon})["vending"~"(drinks|beverages)"]`);
+        clauses.push(`way(around:${radius},${lat},${lon})["vending"~"(drinks|beverages)"]`);
       }
       const re = '(' + values.map(v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')';
       clauses.push(`node(around:${radius},${lat},${lon})["${k}"~"${re}"]`);
-clauses.push(`way(around:${radius},${lat},${lon})["${k}"~"${re}"]`);
+      clauses.push(`way(around:${radius},${lat},${lon})["${k}"~"${re}"]`);
     });
 
     return `[out:json][timeout:25];
@@ -1556,14 +1556,14 @@ out center;`;
         dist,                     // 互換のため残す
         distFromTriggerM: dist,   // 明示名
         distKm: dist / 1000       // 便利フィールド
-        });
+      });
     });
 
     // 重複排除（同名＆近接点が多い場合もあるので座標キーで粗く）
     const seen = new Set();
     const uniq = [];
     for (const p of results) {
-      const key = ${p.name}|${p.lat.toFixed(5)},${p.lon.toFixed(5)};
+      const key = `${p.name}|${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
       if (seen.has(key)) continue;
       seen.add(key);
       uniq.push(p);
@@ -1605,6 +1605,7 @@ out center;`;
 
   return picked;
 }
+
 
 
 /* ===== 小ユーティリティ ===== */
@@ -2731,6 +2732,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
