@@ -377,12 +377,22 @@ function updateAlgoPerfSummary(algoCode){
 
 
 
-// ▼▼ ここに追加：休憩リスト用変数 ▼▼
+// ▼▼ 休憩リスト用変数 ▼▼
 let restList = []; // 休憩地点を保存
 let restGroups = []; 
 
-const ICON = c=>new L.Icon({iconUrl:https://maps.gstatic.com/mapfiles/ms2/micons/${c}-dot.png,iconSize:[32,32],iconAnchor:[16,32]});
-const ICONS = {start:ICON('green'),via:ICON('blue'),goal:ICON('red')};
+const ICON = c => new L.Icon({
+  iconUrl: `https://maps.gstatic.com/mapfiles/ms2/micons/${c}-dot.png`,
+  iconSize: [32,32],
+  iconAnchor: [16,32]
+});
+
+const ICONS = {
+  start: ICON('green'),
+  via:   ICON('blue'),
+  goal:  ICON('red')
+};
+
 
 const OVERPASS_MIN_INTERVAL = 1800; // 1.8s（必要なら 2000～2500 まで上げてOK）
 let __overpassLastTs = 0;
@@ -2617,6 +2627,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
