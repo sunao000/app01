@@ -2872,21 +2872,51 @@ async function runAlgoWithMeasure(name, label, runner){
   return { list, timeMs, orsUsed, opUsed };
 }
 // ★ 総当たり（ゼロAPI評価版）：greedyTopKCandidates + enumerateCombinations + evalByCums を使用
+// ★ 本物の総当たり（ORS使用）版デバッグランナー
 async function debugBruteforceRunner(cumTotals){
-  const K = 3;  // 各トリガー上位K件だけ使う（必要なら5などに変更）
-  const candGroups = greedyTopKCandidates(restGroups, cumTotals, K);
-  const combos = enumerateCombinations(candGroups, K, 200); // 最大200通りくらい
+  const K = 3;  // 各トリガー上位K件だけ使う（必要に応じて変更）
 
-  const results = combos.map(cmb=>{
-    const ev = evalByCums(restGroups, cmb, cumTotals);
-    return {
-      picksByTrigger: cmb,
-      picks: cmb.filter(Boolean),
-      score: ev.score,
-      stats: ev.stats,
-      sigma: ev.sigma
-    };
-  });
+  // 等間隔貪欲で各トリガー上位K件だけを候補に絞る
+  const candGroups = greedyTopKCandidates(restGroups, cumTotals, K);
+
+  // 各トリガー1件ずつ選ぶ全組み合わせ（上限 hardCap でカット）
+  const combos = enumerateCombinations(candGroups, K, /*hardCap=*/30);
+  // ↑ ORS制限が怖ければ 30〜50 くらいに抑えるのがおすすめ
+
+  const { start, goal } = getStartGoalPoints();
+  const profile = document.getElementById('profileSelect')?.value || 'cycling-road';
+
+  const results = [];
+
+  for (const cmb of combos){
+    const picks = cmb.filter(Boolean);
+    const wps = [start, ...picks, goal].map(p => ({
+      lat: p.lat,
+      lon: p.lon,
+      name: p.name || 'POI'
+    }));
+
+    try {
+      // ★ ここで ORS Directions を叩いてレグ統計を取得
+      const { feature, stats } = await routeLegStatsForWaypoints(wps, profile);
+
+      // スコアは普段の総当たりと同じ指標を使う（単一指標σ）
+      const score = comboScore(stats);
+
+      results.push({
+        picksByTrigger: cmb,
+        picks,
+        feature,   // 「このルートを表示」で再利用可能
+        stats,
+        score,
+        // sigma は無くても runAlgoDebugAll 側で stats から計算できるので省略OK
+      });
+    } catch (e){
+      console.warn('debugBruteforceRunner: 1コンボ失敗', e);
+      // 落ちたコンボはスキップ
+    }
+  }
+
   return results;
 }
 
@@ -3072,6 +3102,7 @@ function algoStddev(arr){
 </script>
 </body>
 </html>
+
 
 
 
