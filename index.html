@@ -3142,38 +3142,31 @@ async function debugBruteforceRunnerK3(cumTotals){
 }
 
 // ★ 直線距離ベースの総当たりデバッグ（K=5、ゼロAPI）
+// runAlgoWithMeasure からは「配列を返す」ものとして呼ばれる前提
 async function debugLinearRunner(cumTotals){
   const t0 = performance.now();
 
-  // ★★★ ここが一番大事 ★★★
-  // 既存の debugBruteforceRunner と同じ取り方に合わせる
-  // 例: const restGroups = cumTotals.restGroups; など
+  // トータル距離・時間・エネルギー
+  const baseDist   = cumTotals.D ?? cumTotals.baseDist   ?? 0;
+  const baseTime   = cumTotals.T ?? cumTotals.baseTime   ?? 0;
+  const baseEnergy = cumTotals.E ?? cumTotals.baseEnergy ?? 0;
+
+  // 休憩グループ取得（将来対応用に一応残しておく）
   const restGroups =
-    cumTotals.restGroups   // ← まずはこれを優先
-    ?? cumTotals.groups    // ← もし名前が groups ならこっち
-    ?? [];                 // どれでもなければ空配列にしておく
+    cumTotals.restGroups   // 本命
+    ?? cumTotals.groups    // 保険
+    ?? [];
 
-  const baseDist   = cumTotals.baseDist   ?? 0;
-  const baseTime   = cumTotals.baseTime   ?? 0;
-  const baseEnergy = cumTotals.baseEnergy ?? 0;
-
-  const K = 5; // ← 「制限なしK=5」枠は残す
-
-  // restGroups が取れていない（＝構造が違う）ときに落ちないようにガード
+  // ★ 今のアルゴ比較デバッグでは restGroups が来てないのでここは空になる
   if (!Array.isArray(restGroups) || restGroups.length === 0){
-    console.warn('debugLinearRunner: restGroups が空 or 取得できませんでした', cumTotals);
-    return {
-      rows: [],
-      timeMs: Math.round(performance.now() - t0),
-      orsCalls: 0,
-      overpassCalls: 0,
-    };
+    console.warn('debugLinearRunner: restGroups が無いため空配列を返します', cumTotals);
+    return [];   // ← ここ大事：配列で返す
   }
 
   const rows = [];
 
-  // ----- 緯度経度の直線距離[m]を出す小ヘルパー -----
-  const R = 6371000; // 地球半径[m]
+  // ---- ここから先は「本気実装」ゾーン（前回書いた DFS 部分） ----
+  const R = 6371000;
   const toRad = d => d * Math.PI / 180;
 
   function distLL(a, b){
@@ -3200,11 +3193,9 @@ async function debugLinearRunner(cumTotals){
     return null;
   }
 
-  // 想定巡航速度 [m/s]
-  const SPEED_MS = 20 / 3.6;  // 20km/h
-
-  // 1m あたりのエネルギー[kJ/m]（基準ルートから近似）
+  const SPEED_MS = 20 / 3.6;
   const kJ_per_m = baseDist > 0 ? (baseEnergy / baseDist) : 0;
+  const K = 5; // ← 「制限なしK=5」はそのまま残し
 
   function dfs(groupIdx, chosenPois, detourDistSum){
     if (groupIdx === restGroups.length){
@@ -3216,7 +3207,7 @@ async function debugLinearRunner(cumTotals){
       const totalTime   = baseTime   + detourTime;
       const totalEnergy = baseEnergy + detourEnergy;
 
-      const rawScore   = detourDist; // m
+      const rawScore   = detourDist;
       const sigmaDist  = detourDist;
       const sigmaTime  = 0;
       const sigmaEnergy= 0;
@@ -3259,34 +3250,18 @@ async function debugLinearRunner(cumTotals){
 
   if (restGroups.length > K){
     console.warn(`debugLinearRunner: restGroups が K(${K}) を超えています (=${restGroups.length})`);
-    // ここで「先頭K個だけ使う」などにしたいなら:
-    // restGroups = restGroups.slice(0, K);
+    // 必要なら restGroups = restGroups.slice(0, K); にする
   }
 
   dfs(0, [], 0);
 
-  const t1 = performance.now();
-
+  // 自分の中で一応ソートしておく（runAlgoWithMeasure 側でもう一度ソートされても問題なし）
   rows.sort((a, b) => a.score - b.score);
-  rows.forEach((r, idx) => {
-    r.rank = idx + 1;
-  });
+  rows.forEach((r, idx) => r.rank = idx + 1);
 
-  return {
-    rows,
-    timeMs: Math.round(t1 - t0),
-    orsCalls: 0,
-    overpassCalls: 0,
-  };
+  return rows;  // ★ 重要：配列だけ返す
 }
-
-
-
   
 </script>
 </body>
 </html>
-
-
-
-
