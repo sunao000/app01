@@ -2605,6 +2605,65 @@ ${counts || '(none)'}`;
   });
 }
 
+// ★ アルゴリズム比較結果をCSVダウンロード（完成版・グローバル）
+function downloadAlgoCompareCsv(){
+  const rows = window.__algoCompareRows || [];
+  if (!rows.length){
+    alert('アルゴリズム比較データがありません（先に「アルゴリズム比較デバッグ」を実行してください）');
+    return;
+  }
+
+  const esc = s => String(s).replace(/"/g,'""');
+
+  const header = [
+    'algo',
+    'label',
+    'rank',
+    'score',
+    'rawScore',
+    'sigmaDist_km',
+    'sigmaTime_min',
+    'sigmaEnergy_kJ',
+    'time_ms',
+    'ors_calls',
+    'overpass_calls',
+    'poi_names'
+  ];
+
+  const lines = [];
+  lines.push(header.join(','));
+
+  rows.forEach(r=>{
+    lines.push([
+      `"${esc(r.algo ?? '')}"`,
+      `"${esc(r.label ?? '')}"`,
+      r.rank ?? '',
+      r.score ?? '',
+      r.rawScore ?? '',
+      r.sigmaDist_km ?? r.sigmaDist ?? '',
+      r.sigmaTime_min ?? r.sigmaTime ?? '',
+      r.sigmaEnergy_kJ ?? r.sigmaEnergy ?? '',
+      r.time_ms ?? r.timeMs ?? '',
+      r.ors_calls ?? r.orsCalls ?? '',
+      r.overpass_calls ?? r.overpassCalls ?? '',
+      `"${esc(r.poi_names ?? r.poiNames ?? '')}"`
+    ].join(','));
+  });
+
+  // UTF-8 BOM 付き & CRLF 改行（Excel 対策）
+  const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+  const csv = lines.join('\r\n');
+  const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8' });
+
+  const url  = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'algo_compare_debug.csv';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 500);
+}
+
+  
 function injectAlgoDebugButtons(cumTotals){
   // 既に挿入済みならスキップ
   if (document.getElementById('algoDebugBar')) return;
@@ -2824,6 +2883,7 @@ async function showLinearComboRoute(row){
   const v = arr.reduce((s,x)=>s+(x-m)*(x-m),0) / arr.length;
   return Math.sqrt(v);
 }
+const algoStddev = stddev;
 
 /* ===== アルゴリズム比較用：計測付きラッパー ===== */
 // name: 'bruteforce' / 'beam' など
@@ -2992,51 +3052,6 @@ async function runAlgoDebugAll(){
     };
   };
 
-// ★ アルゴリズム比較結果をCSVダウンロード
-function downloadAlgoCompareCsv(){
-  const rows = window.__algoCompareRows || [];
-  if (!rows.length){
-    alert('アルゴリズム比較データがありません（先に「アルゴリズム比較」を実行してください）');
-    return;
-  }
-
-  const esc = s => String(s).replace(/"/g,'""');
-
-  const header = [
-    'algo',
-    'label',
-    'rank',
-    'score',
-    'rawScore',
-    'sigmaDist_km',
-    'sigmaTime_min',
-    'sigmaEnergy_kJ',
-    'time_ms',
-    'ors_calls',
-    'overpass_calls',
-    'poi_names'
-  ];
-
-  const lines = [];
-  lines.push(header.join(','));
-
-  rows.forEach(r=>{
-    lines.push([
-      `"${esc(r.algo)}"`,
-      `"${esc(r.label)}"`,
-      r.rank ?? '',
-      r.score ?? '',
-      r.rawScore ?? '',
-      r.sigmaDist_km ?? '',
-      r.sigmaTime_min ?? '',
-      r.sigmaEnergy_kJ ?? '',
-      r.time_ms ?? '',
-      r.ors_calls ?? '',
-      r.overpass_calls ?? '',
-      `"${esc(r.poi_names ?? '')}"`
-    ].join(','));
-  });
-
   const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);  // Excel対策
   const csv = lines.join('\r\n');
   const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8' });
@@ -3047,6 +3062,7 @@ function downloadAlgoCompareCsv(){
   a.click();
   setTimeout(()=>URL.revokeObjectURL(url), 500);
 }
+
 
   // 共通ブロック出力関数
   function pushAlgoBlock(title, resultObj){
@@ -3102,6 +3118,7 @@ function algoStddev(arr){
 </script>
 </body>
 </html>
+
 
 
 
