@@ -228,6 +228,22 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   </details>
 </div>
 
+<div class="section">
+  <details open>
+    <summary>探索アルゴリズムの計算時間・API利用状況</summary>
+    <div id="algoPerfSummary" style="font-size:0.9rem;color:#555">
+      未実行
+    </div>
+    <!-- ★ここ追加 -->
+    <div style="margin-top:6px">
+      <button id="btnAlgoDebug" type="button">
+        アルゴリズム比較デバッグ（総当たり＋ビーム）
+      </button>
+    </div>
+  </details>
+</div>
+
+
 <!-- ▼▼ スコア指標セレクタを追加 ▼▼ -->
 <div class="section" id="scoreMetricSection">
   <details open>
@@ -325,6 +341,35 @@ window.addEventListener('DOMContentLoaded', ()=>{
   reset && (reset.onclick=()=>{ PERF.rows.length=0; renderPerf(); });
   exp && (exp.onclick=exportPerfCSV);
   renderPerf();
+  /* ===== ここから追加：アルゴリズム比較デバッグボタン ===== */
+  const dbgBtn = $('btnAlgoDebug');
+  if (dbgBtn){
+    dbgBtn.onclick = async () => {
+      try {
+        if (!routeData.fastest){
+          alert('先に「休憩場所検索」を実行してください。');
+          return;
+        }
+        if (!Array.isArray(restGroups) || !restGroups.length){
+          alert('先に「ルート検索」で休憩組み合わせを生成してください。');
+          return;
+        }
+
+        // POI→ルート射影の再計算
+        ensureProjections();
+
+        // デバッグパネル（デバッグバー）を出す
+        injectAlgoDebugButtons(window.__cumTotals);
+
+        // 総当たり＋ビームサーチの比較実行（結果はログ＋CSVバッファに保存）
+        await runAlgoDebugAll();
+
+      } catch(e){
+        console.error(e);
+        alert('アルゴリズム比較デバッグでエラー: ' + (e.message || e));
+      }
+    };
+  }
 });
 
 /* ===== API 利用カウンタ ===== */
@@ -2951,4 +2996,5 @@ function downloadAlgoCompareCsv(){
 </script>
 </body>
 </html>
+
 
