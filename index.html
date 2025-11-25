@@ -2535,27 +2535,28 @@ function ensureProjections() {
 }
 
 function dbgShowCumsAndProjections(){
-  const el = $('dbgCums'); if (!el) return;
+  const el = $('dbgCums');
+  if (!el) return;
   const t = window.__cumTotals;
   const counts = (restGroups||[]).map((g,i)=>{
     const valid = (g?.pois||[]).filter(p=>p && p._proj && Number.isFinite(p._proj.cumD)).length;
     return `#${i+1}: POI=${(g?.pois||[]).length}, projOK=${valid}`;
   }).join('\n');
-  el.textContent =
-cumTotals:
+
+  el.textContent = 
+`cumTotals:
   D=${t?.D?.toFixed?.(1)} m
   T=${t?.T?.toFixed?.(1)} s
   E=${t?.E?.toFixed?.(1)} kJ
 per-trigger candidates:
-${counts || '(none)'};
+${counts || '(none)'}`;
+
   console.log("[ensureProjections] 射影を再計算しました");
   (restGroups||[]).forEach((g,i)=>{
-      const ok = (g?.pois||[]).filter(p=>p && p._proj && Number.isFinite(p._proj.cumD)).length;
-      console.log([projOK] trigger#${i+1}: all=${(g?.pois||[]).length}, projOK=${ok});
-    });
+    const ok = (g?.pois||[]).filter(p=>p && p._proj && Number.isFinite(p._proj.cumD)).length;
+    console.log(`[projOK] trigger#${i+1}: all=${(g?.pois||[]).length}, projOK=${ok}`);
+  });
 }
-
-  
 
 function injectAlgoDebugButtons(cumTotals){
   // 既に挿入済みならスキップ
@@ -2565,13 +2566,12 @@ function injectAlgoDebugButtons(cumTotals){
   bar.id = 'algoDebugBar';
   bar.style.margin = '6px 0 10px';
   bar.innerHTML = 
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button id="dbgRunGreedy">デバッグ: 等間隔貪欲</button>
-      <button id="dbgRunBeam">デバッグ: ビームサーチ</button>
-      <button id="dbgClear">クリア</button>
-    </div>
-    <pre id="dbgAlgoLog" style="font-family:ui-monospace,monospace;background:#f8f8f8;border:1px solid #eee;padding:6px;white-space:pre-wrap"></pre>
-  ;
+`<div style="display:flex;gap:6px;flex-wrap:wrap">
+  <button id="dbgRunGreedy">デバッグ: 等間隔貪欲</button>
+  <button id="dbgRunBeam">デバッグ: ビームサーチ</button>
+  <button id="dbgClear">クリア</button>
+</div>
+<pre id="dbgAlgoLog" style="font-family:ui-monospace,monospace;background:#f8f8f8;border:1px solid #eee;padding:6px;white-space:pre-wrap"></pre>`;
   host.prepend(bar);
 
   const logEl = document.getElementById('dbgAlgoLog');
@@ -2585,13 +2585,18 @@ function injectAlgoDebugButtons(cumTotals){
       const ev = evalByCums(restGroups, cmb, cumTotals);
       return {cmb, score:ev.score, stats:ev.stats};
     }).sort((a,b)=>a.score-b.score).slice(0,3);
+
     log('[GREEDY top3]');
     scored.forEach((r,i)=>{
-      log(#${i+1}: score=${r.score.toFixed(4)}  segN=${r.stats.dist.length});
+      log(`#${i+1}: score=${r.score.toFixed(4)}  segN=${r.stats.dist.length}`);
     });
+
     showTop3Combos(scored.map(s=>({
-  score:s.score, stats:s.stats, picksByTrigger:s.cmb, picks:s.cmb.filter(Boolean)
-})));
+      score:s.score,
+      stats:s.stats,
+      picksByTrigger:s.cmb,
+      picks:s.cmb.filter(Boolean)
+    })));
   };
 
   document.getElementById('dbgRunBeam').onclick = ()=>{
@@ -2600,10 +2605,12 @@ function injectAlgoDebugButtons(cumTotals){
       return n + (valid.length?1:0);
     },0);
     const top = beamSearch(restGroups, cumTotals, 3, triggersWithCand, 1e6, true);
+
     log('[BEAM top3]');
     top.forEach((r,i)=>{
-      log(#${i+1}: score=${r.score.toFixed(4)}  segN=${r.stats.dist.length});
+      log(`#${i+1}: score=${r.score.toFixed(4)}  segN=${r.stats.dist.length}`);
     });
+
     top.forEach(t=>t.picks = t.picksByTrigger.filter(Boolean));
     showTop3Combos(top);
   };
@@ -2755,16 +2762,3 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-
-
