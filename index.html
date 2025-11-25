@@ -1983,7 +1983,9 @@ function topPoisPerTriggerForLinear(maxPer=5){
   return restGroups.map((g,i)=>{
     const arr = (g?.pois || []).slice();
     // 「候補なし」のトリガーがあると組み合わせが成立しないので、ここで弾く
-    if(!arr.length) throw new Error(トリガー#${i+1} に候補POIがありません);
+    if(!arr.length) {
+  throw new Error(`トリガー#${i+1} に候補POIがありません`);
+}
     const score = p=>{
       const a = Number(p?.distFromTriggerM) || 0;
       const b = Number(p?._proj?.perpM) || 0;
@@ -2103,8 +2105,9 @@ function renderLinearResults(rows){
     cont.appendChild(wrap);
   });
 
-  const msg = 総組合せ数: ${rows.length.toLocaleString()} 件（上位 ${Math.min(SHOW, rows.length)} 件を表示／CSVは全件出力可能）;
-  sum.textContent = msg;
+  const msg = `総組合せ数: ${rows.length.toLocaleString()} 件（上位 ${Math.min(SHOW, rows.length)} 件を表示／CSVは全件出力可能）`;
+sum.textContent = msg;
+
 }
 
 function downloadLinearCsv(){
@@ -2331,8 +2334,6 @@ function evalByCums(restGroups, picksByTrigger, cumTotals){
 
   return { stats: { dist: distF, time: timeF, energy: energyF }, score, sigma: sigmas };
 }
-
-/* ===== 共通ユーティリティ：候補検査＆未採用の強制補修 ===== */
 
 /* ===== 共通ユーティリティ：候補検査＆未採用の強制補修 ===== */
 
@@ -2754,6 +2755,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
