@@ -1714,7 +1714,9 @@ function setComboMarkers(start, picksArray, goal){
         iconUrl: 'https://maps.gstatic.com/mapfiles/ms2/micons/purple-dot.png',
         iconSize:[32,32], iconAnchor:[16,32]
       })
-    }).bindTooltip(${p.name || '休憩'} #${i+1}).addTo(markerLayer);
+    }).bindTooltip(
+      `${p.name || '休憩'} #${i+1}`
+    ).addTo(markerLayer);
   });
 
   // ゴール
@@ -1723,6 +1725,7 @@ function setComboMarkers(start, picksArray, goal){
       .bindTooltip(goal.name || 'ゴール').addTo(markerLayer);
   }
 }
+
 
 
 function showTop3Combos(resultList){
@@ -2736,6 +2739,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
