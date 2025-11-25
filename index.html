@@ -297,12 +297,15 @@ function tEnd(tok, info){
   renderPerf();
 }
 function renderPerf(){
-  const el = document.getElementById('perfPanel'); if(!el) return;
+  const el = document.getElementById('perfPanel');
+  if(!el) return;
+
   el.textContent = PERF.rows.slice(-30).map(r=>{
     const m = r.ms.toFixed(1).padStart(7,' ');
-    return ${m} ms  ${r.name}${r.info? — ${r.info}:''};
+    return `${m} ms  ${r.name}${r.info ? ` — ${r.info}` : ''}`;
   }).join('\n') || '(no data)';
 }
+
 function exportPerfCSV(){
   const bom=new Uint8Array([0xEF,0xBB,0xBF]);
   const lines = [['name','ms','info']]
@@ -2610,3 +2613,4 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
