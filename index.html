@@ -488,13 +488,14 @@ if (sm) {
       ()=>alert('現在地取得失敗'));
   $('drawBtn').onclick=drawRoutes;
 
-  $('solveCombBtn').onclick = async () => {
-     const algoCode = $('algoSelect').value;                // どのアルゴリズムか
-  const tkSolveAll = tStart(探索: ${algoCode});        // 全体計測開始
+$('solveCombBtn').onclick = async () => {
+  const algoCode = $('algoSelect').value;                // どのアルゴリズムか
+  const tkSolveAll = tStart(`探索: ${algoCode}`);        // 全体計測開始
 
   // ★このタイミングの API 累計値を記録（差分を見るため）
   const prevOrs = API_USED.orsTotal;
   const prevOv  = API_USED.overpassTotal;
+
   try {
     // 0) 前提チェック
     if (!routeData.fastest){
@@ -514,160 +515,142 @@ if (sm) {
     injectAlgoDebugButtons(window.__cumTotals);
 
     // 1) 入力＆共有データ取得
-    const algo = $('algoSelect').value; // 'greedy' | 'beam3' | 'bruteforce'
+    const algo = $('algoSelect').value; // 'greedy' | 'beam3' | 'bruteforce' | 'dp'
     const start = pts.find(p=>p.type==='start') || pts[0];
     const goal  = pts.find(p=>p.type==='goal')  || pts[pts.length-1];
     if (!start || !goal){
       alert('スタート/ゴールが見つかりません。');
       return;
     }
-    const cumTotals = window.__cumTotals; // drawRoutes() 実行後に buildCums() で設定済みの累積総量
+    const cumTotals = window.__cumTotals; // drawRoutes() 実行後に buildCums() 済み
 
-   // 2) アルゴリズム分岐（★ 計測フック追加版）
-if (algo === 'greedy'){
-  const tkG = tStart('探索: 等間隔貪欲');  // ← 計測開始
-  try {
-    // 等間隔ターゲットに近い「上位K候補」を各トリガーから集める
-    const K = 3; // ここを2～5で調整可
-    const candGroups = greedyTopKCandidates(restGroups, cumTotals, K);
-
-    // 直積（上限をかけて暴走防止）
-    const combos = enumerateCombinations(candGroups, /*perGroupLimit=*/K, /*hardCap=*/60);
-    if (!combos.length){
-      alert('組み合わせ候補が作れませんでした（候補不足）。');
-      return;
-    }
-
-    // 全候補を「累積差分の近似評価」で採点（ゼロAPI）
-    const scored = combos.map(cmb => {
-      const picksByTrigger = cmb; // null含む（未採用も許容）
-      const ev = evalByCums(restGroups, picksByTrigger, cumTotals); // dist/time/energy のσ合計でスコア
-      return {
-        score: ev.score,
-        stats: ev.stats,
-        picksByTrigger,
-        picks: picksByTrigger.filter(Boolean)
-      };
-    });
-
-    // スコア昇順で上位3件を表示
-    scored.sort((a,b)=>a.score-b.score);
-    showTop3Combos(scored.slice(0,3));
-  } finally {
-    // info には「トリガー数」「候補の総数」「試したコンボ数」を入れると見やすい
-    const R = restGroups?.length || 0;
-    const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
-    tEnd(tkG, R=${R}, cand=${totalCand});
-  }
-  return;
-}
-
-if (algo === 'beam3'){
-  const tkB = tStart('探索: ビームサーチ');  // ← 計測開始
-  try {
-    // 「候補があるトリガー数」は必ず採用する
-    const triggersWithCand = (restGroups || []).reduce((n, g) => {
-      const valid = (g?.pois || []).filter(p => p && p._proj && Number.isFinite(p._proj.cumD));
-      return n + (valid.length ? 1 : 0);
-    }, 0);
-
-    const width = 3; // ビーム幅
-    const top = beamSearch(restGroups, cumTotals, /*width*/width, /*minRest*/triggersWithCand, /*nullPenalty*/1e6, /*forbidNullWhenCand*/true);
-    top.forEach(t => t.picks = t.picksByTrigger.filter(Boolean));
-    showTop3Combos(top);
-  } finally {
-    const R = restGroups?.length || 0;
-    const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
-    tEnd(tkB, R=${R}, cand=${totalCand}, width=3);
-  }
-  return;
-}
-
-if (algo === 'bruteforce'){
-  const tkBF = tStart('探索: 総当たり');  // ← 計測開始（全体）
-  try {
-    // --- 総当たり（API多め・高精度）---
-    //const perGroupLimit = Math.max(1, Math.min(3, Number($('poiLimit').value)||3)); // 各トリガー最大件数
-    const perGroupLimit = Math.max(1, Number($('poiLimit').value) || 5);
-    const poiGroups = restGroups.map(g => Array.isArray(g.pois) ? g.pois : []);
-    const combos = enumerateCombinations(poiGroups, perGroupLimit, 60);             // 総当たり上限60通り
-    if (!combos.length){
-      alert('組み合わせ候補が作れませんでした。');
-      return;
-    }
-
-    const profile = $('profileSelect').value; // ORSプロファイル（cycling-road 等）
-    const results = [];
-
-    // 逐次でAPI負荷を抑えつつ評価
-    let okCount = 0, failCount = 0;
-    for (const cmb of combos){
-      const picks = cmb.filter(Boolean); // null除外
-      const wps = [start, ...picks, goal].map(p=>({
-        lat: p.lat, lon: p.lon, name: p.name || 'POI'
-      }));
-
-      // （任意）1コンボ毎の計測が欲しいなら、ここで開始
-      const tkOne = tStart('総当たり: 1コンボ');
-
+    // 2) アルゴリズム分岐
+    if (algo === 'greedy'){
+      const tkG = tStart('探索: 等間隔貪欲');
       try {
-        const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
-        const rawScore = comboScore(stats); // 距離/時間/エネの標準偏差の合計
-        const weights  = picks.map(p => Number(p?._w) || 1);
-        const meanW    = weights.length ? (weights.reduce((a,b)=>a+b,0)/weights.length) : 1;
-        const score    = rawScore / Math.max(0.1, meanW); // 重みが高い組合せを優遇
-        results.push({ score, rawScore, feature, picks, picksByTrigger: cmb, stats });
-        okCount++;
-      } catch(e){
-        console.warn('combo route fail', e);
-        failCount++;
-        // 失敗した組合せはスキップ
+        const K = 3;
+        const candGroups = greedyTopKCandidates(restGroups, cumTotals, K);
+        const combos = enumerateCombinations(candGroups, /*perGroupLimit=*/K, /*hardCap=*/60);
+        if (!combos.length){
+          alert('組み合わせ候補が作れませんでした（候補不足）。');
+          return;
+        }
+
+        const scored = combos.map(cmb => {
+          const picksByTrigger = cmb;
+          const ev = evalByCums(restGroups, picksByTrigger, cumTotals);
+          return {
+            score: ev.score,
+            stats: ev.stats,
+            picksByTrigger,
+            picks: picksByTrigger.filter(Boolean)
+          };
+        });
+
+        scored.sort((a,b)=>a.score-b.score);
+        showTop3Combos(scored.slice(0,3));
       } finally {
-        // 1コンボの経過時間を残したい場合（ログが多いと感じたら外してOK）
-        //tEnd(tone, ok=${okCount}, fail=${failCount});
+        const R = restGroups?.length || 0;
+        const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
+        tEnd(tkG, `R=${R}, cand=${totalCand}`);
       }
+      return;
     }
 
-    // スコア昇順に上位3件
-    results.sort((a,b)=>a.score-b.score);
-    showTop3Combos(results.slice(0,3));
-  } finally {
-    const R = restGroups?.length || 0;
-    const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
-    tEnd(tkBF, R=${R}, cand=${totalCand}, cap=60);
-  }
-  return;
-}
+    if (algo === 'beam3'){
+      const tkB = tStart('探索: ビームサーチ');
+      try {
+        const triggersWithCand = (restGroups || []).reduce((n, g) => {
+          const valid = (g?.pois || []).filter(p => p && p._proj && Number.isFinite(p._proj.cumD));
+          return n + (valid.length ? 1 : 0);
+        }, 0);
 
-if (algo === 'dp'){
-  const tkDP = tStart('探索: DP');  // ← 計測開始
-  try {
-    const best = dpSearch(restGroups, cumTotals);
-    best.picks = best.picksByTrigger.filter(Boolean);
-    showTop3Combos([best]);  // DPは最適解1本を出す
-  } finally {
-    const R = restGroups?.length || 0;
-    const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
-    tEnd(tkDP, R=${R}, cand=${totalCand});
-  }
-  return;
-}
+        const width = 3;
+        const top = beamSearch(restGroups, cumTotals, width, /*minRest*/triggersWithCand, /*nullPenalty*/1e6, /*forbidNullWhenCand*/true);
+        top.forEach(t => t.picks = t.picksByTrigger.filter(Boolean));
+        showTop3Combos(top);
+      } finally {
+        const R = restGroups?.length || 0;
+        const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
+        tEnd(tkB, `R=${R}, cand=${totalCand}, width=3`);
+      }
+      return;
+    }
 
+    if (algo === 'bruteforce'){
+      const tkBF = tStart('探索: 総当たり');
+      try {
+        const perGroupLimit = Math.max(1, Number($('poiLimit').value) || 5);
+        const poiGroups = restGroups.map(g => Array.isArray(g.pois) ? g.pois : []);
+        const combos = enumerateCombinations(poiGroups, perGroupLimit, 60);
+        if (!combos.length){
+          alert('組み合わせ候補が作れませんでした。');
+          return;
+        }
+
+        const profile = $('profileSelect').value;
+        const results = [];
+        let okCount = 0, failCount = 0;
+
+        for (const cmb of combos){
+          const picks = cmb.filter(Boolean);
+          const wps = [start, ...picks, goal].map(p=>({
+            lat: p.lat, lon: p.lon, name: p.name || 'POI'
+          }));
+
+          const tkOne = tStart('総当たり: 1コンボ');
+
+          try {
+            const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
+            const rawScore = comboScore(stats);
+            const weights  = picks.map(p => Number(p?._w) || 1);
+            const meanW    = weights.length ? (weights.reduce((a,b)=>a+b,0)/weights.length) : 1;
+            const score    = rawScore / Math.max(0.1, meanW);
+            results.push({ score, rawScore, feature, picks, picksByTrigger: cmb, stats });
+            okCount++;
+          } catch(e){
+            console.warn('combo route fail', e);
+            failCount++;
+          } finally {
+            tEnd(tkOne, `ok=${okCount}, fail=${failCount}`);
+          }
+        }
+
+        results.sort((a,b)=>a.score-b.score);
+        showTop3Combos(results.slice(0,3));
+      } finally {
+        const R = restGroups?.length || 0;
+        const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
+        tEnd(tkBF, `R=${R}, cand=${totalCand}, cap=60`);
+      }
+      return;
+    }
+
+    if (algo === 'dp'){
+      const tkDP = tStart('探索: DP');
+      try {
+        const best = dpSearch(restGroups, cumTotals);
+        best.picks = best.picksByTrigger.filter(Boolean);
+        showTop3Combos([best]);
+      } finally {
+        const R = restGroups?.length || 0;
+        const totalCand = (restGroups||[]).reduce((s,g)=>s+(g?.pois?.length||0),0);
+        tEnd(tkDP, `R=${R}, cand=${totalCand}`);
+      }
+      return;
+    }
 
     // 未知の値（保険）
     alert('未知のアルゴリズム指定です。');
-    } catch (err){
+
+  } catch (err){
     console.error(err);
     alert('ルート探索でエラー: ' + (err.message || err));
   } finally {
-    // ★今回の探索で使った API 回数（差分）を記録
     API_USED.lastSolveOrs      = API_USED.orsTotal      - prevOrs;
     API_USED.lastSolveOverpass = API_USED.overpassTotal - prevOv;
 
-    // 計測終了（PERF に記録）
     tEnd(tkSolveAll);
-
-    // UI に反映
     updateAlgoPerfSummary(algoCode);
   }
 };
@@ -2627,6 +2610,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
