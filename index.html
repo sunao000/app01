@@ -3142,15 +3142,149 @@ async function debugBruteforceRunnerK3(cumTotals){
 }
 
 // ★ 直線距離デバッグ用（今はダミー実装）
-//   後で中身をちゃんと作る前提で、とりあえずエラー回避
+// ★ 直線距離ベースの総当たりデバッグ（K=5、ゼロAPI）
 async function debugLinearRunner(cumTotals){
-  console.log('debugLinearRunner: まだ中身は未実装です');
-  return [];  // runAlgoWithMeasure の想定に合わせて配列を返す
+  // cumTotals には他の総当たりと同じ情報が入っている想定
+  // （restGroups, baseDist, baseTime, baseEnergy など）
+  const { restGroups, baseDist, baseTime, baseEnergy } = cumTotals;
+
+  const K = 5;                   // ← Naokiが言ってた「制限なしK=5」をここで維持
+  const rows = [];
+
+  const t0 = performance.now();
+
+  // ----- 緯度経度の直線距離[m]を出す小ヘルパー -----
+  const R = 6371000; // 地球半径[m]
+  const toRad = d => d * Math.PI / 180;
+
+  function distLL(a, b){
+    // a, b: { lat, lng } または { lat, lon }
+    const lat1 = toRad(a.lat ?? a.latitude);
+    const lon1 = toRad(a.lng ?? a.lon ?? a.longitude);
+    const lat2 = toRad(b.lat ?? b.latitude);
+    const lon2 = toRad(b.lng ?? b.lon ?? b.longitude);
+
+    const dLat = lat2 - lat1;
+    const dLon = lon2 - lon1;
+    const s =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(s));  // m
+  }
+
+  // restGroups[g] の想定:
+  // {
+  //   trigger: { lat, lng } または { latlng: {lat, lng} } など
+  //   pois: [
+  //     { name, lat, lng } or { name, latlng: {lat, lng} } ...
+  //   ]
+  // }
+
+  function getLatLng(obj){
+    if (!obj) return null;
+    if (obj.latlng) return obj.latlng;
+    if (obj.latLng) return obj.latLng;
+    if (typeof obj.lat === 'number' && (typeof obj.lng === 'number' || typeof obj.lon === 'number')) {
+      return { lat: obj.lat, lng: obj.lng ?? obj.lon };
+    }
+    return null;
+  }
+
+  // 想定巡航速度 [m/s]（直線距離 → 時間の近似用）
+  const SPEED_MS = 20 / 3.6;  // 20km/h
+
+  // 1m あたりのエネルギー[kJ/m]（基準ルートから近似）
+  const kJ_per_m = baseDist > 0 ? (baseEnergy / baseDist) : 0;
+
+  // ----- 再帰で「各トリガーから1件ずつ」の全組合せを総当たり -----
+  function dfs(groupIdx, chosenPois, detourDistSum){
+    if (groupIdx === restGroups.length){
+      // ---- ここで 1 組合せ分のスコア計算 ----
+      const detourDist = detourDistSum;               // m
+      const detourTime = detourDist / SPEED_MS;       // s (雑に距離比例)
+      const detourEnergy = detourDist * kJ_per_m;     // kJ
+
+      const totalDist = baseDist + detourDist;
+      const totalTime = baseTime + detourTime;
+      const totalEnergy = baseEnergy + detourEnergy;
+
+      // 単純に「追加の直線距離が短いほど良い」というスコアにする
+      const rawScore = detourDist;    // m
+      const sigmaDist = detourDist;   // 一旦同じ値をそのまま入れておく
+      const sigmaTime = 0;
+      const sigmaEnergy = 0;
+
+      rows.push({
+        // rank はあとで sort 後に振る
+        score: rawScore,
+        rawScore,
+        sigmaDist,
+        sigmaTime,
+        sigmaEnergy,
+        totalDist,
+        totalTime,
+        totalEnergy,
+        poiNames: chosenPois.map(p => p.name ?? 'POI').join(' / ')
+      });
+      return;
+    }
+
+    const g = restGroups[groupIdx];
+    if (!g || !g.pois || !g.pois.length) return;
+
+    const triggerLL =
+      getLatLng(g.trigger) ||
+      getLatLng(g.triggerLatLng) ||
+      getLatLng(g.center);
+
+    g.pois.forEach(poi => {
+      const poiLL = getLatLng(poi) || getLatLng(poi.latlng);
+      if (!triggerLL || !poiLL) {
+        // 位置が取れない場合は距離0扱いで進める
+        dfs(groupIdx + 1, [...chosenPois, poi], detourDistSum);
+        return;
+      }
+
+      // ここが「直線距離ベース」の肝:
+      // 1) ルート上のトリガー地点 → POI までの直線距離
+      // 2) 行き + 戻り と仮定して 2倍
+      const d_oneway = distLL(triggerLL, poiLL);  // m
+      const d_roundtrip = d_oneway * 2;
+
+      dfs(groupIdx + 1, [...chosenPois, poi], detourDistSum + d_roundtrip);
+    });
+  }
+
+  // K=5 のときの「総当たり」自体は restGroups の長さで決まるので、
+  // K 変数は「総当たりの評価対象の上限」としてだけ使うならここでチェックしてもOK。
+  if (restGroups.length > K){
+    console.warn(`debugLinearRunner: restGroups が K(${K}) を超えています (=${restGroups.length})`);
+    // ここで上位K個だけ見る等の制限をかけたければかける
+  }
+
+  dfs(0, [], 0);
+
+  const t1 = performance.now();
+
+  // スコアが小さい順に並べつつ rank を振る
+  rows.sort((a, b) => a.score - b.score);
+  rows.forEach((r, idx) => {
+    r.rank = idx + 1;
+  });
+
+  return {
+    rows,
+    timeMs: Math.round(t1 - t0),
+    orsCalls: 0,        // 直線距離のみなので常に0
+    overpassCalls: 0,   // ここでも追加のOverpassは叩かない前提
+  };
 }
+
 
   
 </script>
 </body>
 </html>
+
 
 
