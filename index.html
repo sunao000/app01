@@ -2874,7 +2874,7 @@ async function runAlgoWithMeasure(name, label, runner){
 // ★ 総当たり（ゼロAPI評価版）：greedyTopKCandidates + enumerateCombinations + evalByCums を使用
 // ★ 本物の総当たり（ORS使用）版デバッグランナー
 async function debugBruteforceRunner(cumTotals){
-  const K = 3;  // 各トリガー上位K件だけ使う（必要に応じて変更）
+  const K = 5;  // 各トリガー上位K件だけ使う（必要に応じて変更）
 
   // 等間隔貪欲で各トリガー上位K件だけを候補に絞る
   const candGroups = greedyTopKCandidates(restGroups, cumTotals, K);
@@ -3102,6 +3102,7 @@ function algoStddev(arr){
 </script>
 </body>
 </html>
+
 
 
 
