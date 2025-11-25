@@ -1086,7 +1086,7 @@ async function makeRestPoints(feature,mass,flat){
    *  - progTsec, progEkJ：その時点までの累積（不明なら省略→距離比で近似）
    */
   function pushIfNotSkipped(raw, hereCumM, lat, lon, label, progTsec, progEkJ) {
-    const { skipGoalOn, skipNodeOn, skipGoalKm, skipNodeM } = getSkipUI();
+  const { skipGoalOn, skipNodeOn, skipGoalKm, skipNodeM } = getSkipUI();
 
     // 残量計算（累積が未指定なら距離比で近似）
     const remainD = Math.max(0, (totalD || 0) - (hereCumM || 0)); // m
@@ -1100,19 +1100,27 @@ async function makeRestPoints(feature,mass,flat){
     const remainE = Math.max(0, (totalE || 0) - (usedE || 0)); // kJ
 
     // 1) ゴール手前スキップ
-    if (skipGoalOn && Number.isFinite(remainD) && remainD <= skipGoalKm * 1000) {
-      logRest(${label} ${(hereCumM/1000).toFixed(2)} km → HIT（スキップ: ゴールまで ${(remainD/1000).toFixed(2)} km / ${formatDur(remainT)} / ${remainE.toFixed(0)} kJ）);
-      return;
-    }
-    // 2) 既存地点近接スキップ
-    if (skipNodeOn && nearExistingNode(lat, lon, skipNodeM)) {
-      logRest(${label} ${(hereCumM/1000).toFixed(2)} km → HIT（スキップ: 既存地点に ${skipNodeM}m 以内）);
-      return;
-    }
-    // 採用
-    raw.push({ lat, lon, routeD: hereCumM });
-    logRest(${label} ${(hereCumM/1000).toFixed(2)} km → HIT);
+  if (skipGoalOn && Number.isFinite(remainD) && remainD <= skipGoalKm * 1000) {
+    logRest(
+      `${label} ${(hereCumM/1000).toFixed(2)} km → HIT（スキップ: ゴールまで ${(remainD/1000).toFixed(2)} km / ${formatDur(remainT)} / ${remainE.toFixed(0)} kJ）`
+    );
+    return;
   }
+
+  // 2) 既存地点近接スキップ
+  if (skipNodeOn && nearExistingNode(lat, lon, skipNodeM)) {
+    logRest(
+      `${label} ${(hereCumM/1000).toFixed(2)} km → HIT（スキップ: 既存地点に ${skipNodeM}m 以内）`
+    );
+    return;
+  }
+
+  // 採用
+  raw.push({ lat, lon, routeD: hereCumM });
+  logRest(
+    `${label} ${(hereCumM/1000).toFixed(2)} km → HIT`
+  );
+}
 
 
   // 現在位置までの累積（秒 / kJ）— 各stepで足していく
@@ -1298,13 +1306,15 @@ async function showRouteLegSummary(){
             : key==='fastest'  ? '最速'
             : key==='slope'    ? '勾配'
             :                    '幹線';
-    const html = 
-      <details style="margin-bottom:8px">
-        <summary><b>${label}</b> 区間統計（平均 / 分散 / 標準偏差）</summary>
-        距離: ${ds.mean.toFixed(2)} km / ${ds.var.toFixed(2)} km² / σ=${ds.std.toFixed(2)} km<br>
-        時間: ${ts.mean.toFixed(2)} 分 / ${ts.var.toFixed(2)} 分² / σ=${ts.std.toFixed(2)} 分<br>
-        エネルギー: ${es.mean.toFixed(1)} kJ / ${es.var.toFixed(1)} kJ² / σ=${es.std.toFixed(1)} kJ
-      </details>;
+    const html = `
+  <details style="margin-bottom:8px">
+    <summary><b>${label}</b> 区間統計（平均 / 分散 / 標準偏差）</summary>
+    距離: ${ds.mean.toFixed(2)} km / ${ds.var.toFixed(2)} km² / σ=${ds.std.toFixed(2)} km<br>
+    時間: ${ts.mean.toFixed(2)} 分 / ${ts.var.toFixed(2)} 分² / σ=${ts.std.toFixed(2)} 分<br>
+    エネルギー: ${es.mean.toFixed(1)} kJ / ${es.var.toFixed(1)} kJ² / σ=${es.std.toFixed(1)} kJ
+  </details>
+`;
+
     outDiv.innerHTML += html;
   }
 }
@@ -1415,7 +1425,10 @@ async function overpassQuery(query) {
       lastText = e.message || String(e);
     }
   }
-  throw new Error([Overpass] all attempts failed. Last status=${lastStatus}. Snippet=${(lastText||'').slice(0,1200)});
+  throw new Error(
+  `[Overpass] all attempts failed. Last status=${lastStatus}. Snippet=${(lastText||'').slice(0,1200)}`
+);
+
 }
 async function overpassRetry(query) {
   let delay = 800;
@@ -1494,21 +1507,21 @@ async function fetchPoisAround(latRaw, lonRaw, baseRadius, limit) {
       const values = Array.from(set);
       // vending_machine は補助属性 vending=drinks にも対応
       if (k === 'amenity' && values.includes('vending_machine')) {
-        clauses.push(node(around:${radius},${lat},${lon})["amenity"="vending_machine"]);
+        clauses.push(`node(around:${radius},${lat},${lon})["amenity"="vending_machine"]`);
         clauses.push(way(around:${radius},${lat},${lon})["amenity"="vending_machine"]);
         clauses.push(node(around:${radius},${lat},${lon})["vending"~"(drinks|beverages)"]);
         clauses.push(way(around:${radius},${lat},${lon})["vending"~"(drinks|beverages)"]);
       }
       const re = '(' + values.map(v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')';
-      clauses.push(node(around:${radius},${lat},${lon})["${k}"~"${re}"]);
-      clauses.push(way(around:${radius},${lat},${lon})["${k}"~"${re}"]);
+      clauses.push(`node(around:${radius},${lat},${lon})["${k}"~"${re}"]`);
+clauses.push(`way(around:${radius},${lat},${lon})["${k}"~"${re}"]`);
     });
 
-    return [out:json][timeout:25];
+    return `[out:json][timeout:25];
 (
   ${clauses.join(';\n  ')};
 );
-out center;;
+out center;`;
   };
 
   // 実行→elements→結果整形
@@ -1612,8 +1625,10 @@ function updateRestListPanel(){
   restList.forEach((r,i)=>{
     const li=document.createElement('li');
     li.style.padding='4px 0';
-    li.innerHTML=${i+1}. ${r.distance} km地点
-      <small>(${r.lat.toFixed(5)}, ${r.lon.toFixed(5)})</small>;
+    li.innerHTML = `
+  ${i+1}. ${r.distance} km地点
+  <small>(${r.lat.toFixed(5)}, ${r.lon.toFixed(5)})</small>
+`;
     ul.appendChild(li);
   });
 }
@@ -1637,8 +1652,11 @@ function updateRestPoiPanel(){
     // 見出し：休憩トリガー#N（km地点 / 緯度経度）
     const km = (g.rest?.routeD ?? 0) / 1000;
     const head = document.createElement('div');
-    head.innerHTML = <b>休憩トリガー＃${i+1}</b>　<span style="color:#666">${km.toFixed(2)} km地点</span>
-      <small>(${(g.rest?.lat ?? 0).toFixed(5)}, ${(g.rest?.lon ?? 0).toFixed(5)})</small>;
+    head.innerHTML = `
+  <b>休憩トリガー＃${i+1}</b>
+  <span style="color:#666">${km.toFixed(2)} km地点</span>
+  <small>(${(g.rest?.lat ?? 0).toFixed(5)}, ${(g.rest?.lon ?? 0).toFixed(5)})</small>
+`;
     li.appendChild(head);
 
     // 候補POIのUL
@@ -1776,8 +1794,11 @@ header.innerHTML =
       const li = document.createElement('li');
       const km = ((g?.rest?.routeD || 0) / 1000).toFixed(2);
       const head = document.createElement('div');
-      head.innerHTML = <b>休憩トリガー＃${i+1}</b>　<span style="color:#666">${km} km地点</span>
-        <small>(${fmt(g?.rest?.lat||0)}, ${fmt(g?.rest?.lon||0)})</small>;
+      head.innerHTML = `
+  <b>休憩トリガー＃${i+1}</b>
+  <span style="color:#666">${km.toFixed(2)} km地点</span>
+  <small>(${(g.rest?.lat ?? 0).toFixed(5)}, ${(g.rest?.lon ?? 0).toFixed(5)})</small>
+`;
       li.appendChild(head);
 
       const chosen = (r.picksByTrigger && r.picksByTrigger[i]) ? r.picksByTrigger[i] : null;
@@ -2021,13 +2042,13 @@ function renderLinearResults(rows){
     const head = document.createElement('div');
     head.style.fontWeight = '700';
     head.style.marginBottom = '4px';
-    head.textContent = #${rank}  合計直線距離: ${r.km.toFixed(2)} km;
+    head.textContent = `#${rank}  合計直線距離: ${r.km.toFixed(2)} km`;
     wrap.appendChild(head);
 
     const meta = document.createElement('div');
     meta.style.color = '#555';
     meta.style.fontSize = '0.92rem';
-    meta.textContent = idx=${JSON.stringify(r.idxes)} | ${names};
+    meta.textContent = `idx=${JSON.stringify(r.idxes)} | ${names}`;
     wrap.appendChild(meta);
 
     const btnRow = document.createElement('div');
@@ -2075,11 +2096,11 @@ function downloadLinearCsv(){
   rows.forEach((r,i)=>{
     const names = r.picks.map(p=> (p?.name ?? 'POI')).join(' -> ');
     lines.push([
-      i+1,
-      r.km.toFixed(3),
-      "${esc(JSON.stringify(r.idxes))}",
-      "${esc(names)}"
-    ].join(','));
+  i+1,
+  r.km.toFixed(3),
+  `"${esc(JSON.stringify(r.idxes))}"`,
+  `"${esc(names)}"`
+].join(','));
   });
 
   // 重要：UTF-8 BOM を先頭に付ける + CRLF 改行（Excel対策）
@@ -2111,7 +2132,9 @@ function bindLinearButtonsOnce(){
       // 総組合せチェック（多すぎる場合は注意だけ出す）
       const total = groups.reduce((a,b)=>a*b.length,1);
       if(total > 200000){
-        if(!confirm(組合せが ${total.toLocaleString()} 件あります。上限20万件まで計算します。続行しますか？)) return;
+        if (!confirm(
+  `組合せが ${total.toLocaleString()} 件あります。上限20万件まで計算します。続行しますか？`
+)) return;
       }
       const combos = enumerateAllOnePerTrigger(groups, /*hardCap*/200000);
 
@@ -2492,7 +2515,7 @@ function dbgShowCumsAndProjections(){
   const t = window.__cumTotals;
   const counts = (restGroups||[]).map((g,i)=>{
     const valid = (g?.pois||[]).filter(p=>p && p._proj && Number.isFinite(p._proj.cumD)).length;
-    return #${i+1}: POI=${(g?.pois||[]).length}, projOK=${valid};
+    return `#${i+1}: POI=${(g?.pois||[]).length}, projOK=${valid}`;
   }).join('\n');
   el.textContent =
 cumTotals:
@@ -2708,6 +2731,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
