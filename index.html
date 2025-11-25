@@ -284,6 +284,7 @@ let map, pts=[], markerLayer, routeLayers={}, lastDirTs=0;
 let routeData = { shortest:null, fastest:null, slope:null, arterial:null };
 let OVERPASS_CALL_TOTAL = 0;  // Overpass API の累計呼び出し回数
 
+window.__algoCompareRows = [];
 
 /* ===== 超シンプル・プロファイラ ===== */
 const PERF = { on:true, rows:[], max:200 };
@@ -2433,14 +2434,15 @@ const cand = valid.length
 
   // ★ 未採用(null)の“補修”をかけてから最終スコア再計算
   final = final.map(b => {
-    const fixedPicks = repairNullPicks(restGroups, cumTotals, b.picks);
-    const ev = evalByCums(restGroups, fixedPicks, cumTotals);
-    return {
-      picksByTrigger: fixedPicks,  // ← 修正後の picks を返す（以後の表示は必ず採用表示になる）
-      score: ev.score,
-      stats: ev.stats
-    };
-  }).sort((a,b)=>a.score - b.score);
+  const fixedPicks = repairNullPicks(restGroups, cumTotals, b.picks);
+  const ev = evalByCums(restGroups, fixedPicks, cumTotals);
+  return {
+    picksByTrigger: fixedPicks,  // ← 修正後の picks を返す
+    score: ev.score,
+    stats: ev.stats,
+    sigma: ev.sigma            // ★ 追加：標準偏差一式
+  };
+}).sort((a,b)=>a.score - b.score);
 
   return final.slice(0, 3);
 }
@@ -2565,10 +2567,12 @@ function injectAlgoDebugButtons(cumTotals){
   const bar = document.createElement('div');
   bar.id = 'algoDebugBar';
   bar.style.margin = '6px 0 10px';
-  bar.innerHTML = 
+ bar.innerHTML = 
 `<div style="display:flex;gap:6px;flex-wrap:wrap">
   <button id="dbgRunGreedy">デバッグ: 等間隔貪欲</button>
   <button id="dbgRunBeam">デバッグ: ビームサーチ</button>
+  <button id="dbgRunAll">アルゴリズム比較(総当たり+ビーム)</button>
+  <button id="dbgDownloadCsv">CSV出力</button>
   <button id="dbgClear">クリア</button>
 </div>
 <pre id="dbgAlgoLog" style="font-family:ui-monospace,monospace;background:#f8f8f8;border:1px solid #eee;padding:6px;white-space:pre-wrap"></pre>`;
@@ -2619,6 +2623,17 @@ function injectAlgoDebugButtons(cumTotals){
     logEl.textContent='';
     document.getElementById('comboTop3').innerHTML='';
   };
+  document.getElementById('dbgRunAll').onclick = ()=>{
+  runAlgoDebugAll().catch(e=>{
+    alert('アルゴリズム比較デバッグでエラー: ' + (e.message || e));
+    console.error(e);
+  });
+};
+
+document.getElementById('dbgDownloadCsv').onclick = ()=>{
+  downloadAlgoCompareCsv();
+};
+
 }
 
 // 幹線度（大きいほど“幹線っぽい”）
@@ -2758,7 +2773,182 @@ async function showLinearComboRoute(row){
   setActiveButton(null);
 }
 
-  
+  function stddev(arr){
+  if (!arr || !arr.length) return 0;
+  const m = arr.reduce((a,b)=>a+b,0) / arr.length;
+  const v = arr.reduce((s,x)=>s+(x-m)*(x-m),0) / arr.length;
+  return Math.sqrt(v);
+}
+
+/* ===== アルゴリズム比較用：計測付きラッパー ===== */
+// name: 'bruteforce' / 'beam' など
+// label: '総当たり' / 'ビームサーチ' など
+// runner: async () => [ { picksByTrigger, stats, score, sigma, rawScore? }, ... ]
+async function runAlgoWithMeasure(name, label, runner){
+  const orsBefore = (API_USED && typeof API_USED.orsTotal === 'number') ? API_USED.orsTotal : 0;
+  const opBefore  = (typeof OVERPASS_CALL_TOTAL === 'number') ? OVERPASS_CALL_TOTAL : 0;
+  const t0 = performance.now();
+
+  const list = await runner();   // アルゴリズム本体
+
+  const t1 = performance.now();
+  const timeMs = t1 - t0;
+  const orsUsed = ((API_USED && typeof API_USED.orsTotal === 'number') ? API_USED.orsTotal : 0) - orsBefore;
+  const opUsed  = (typeof OVERPASS_CALL_TOTAL === 'number' ? OVERPASS_CALL_TOTAL : 0) - opBefore;
+
+  // スコア小さい順に並び替え
+  list.sort((a,b)=>a.score - b.score);
+
+  // グローバルバッファに追記（CSV用）
+  window.__algoCompareRows = window.__algoCompareRows || [];
+  list.forEach((r, idx)=>{
+    const picks = r.picksByTrigger || [];
+    const poiNames = picks.map(p=> p ? (p.name || 'POI') : '(null)').join(' -> ');
+
+    const sig = r.sigma || {};
+    const stats = r.stats || {};
+
+    window.__algoCompareRows.push({
+      algo: name,
+      label: label,
+      rank: idx + 1,
+      score: r.score,
+      rawScore: (typeof r.rawScore === 'number') ? r.rawScore : r.score,
+      sigmaDist_km:   (typeof sig.dist === 'number')   ? sig.dist   : algoStddev(stats.dist   || []),
+      sigmaTime_min:  (typeof sig.time === 'number')   ? sig.time   : algoStddev(stats.time   || []),
+      sigmaEnergy_kJ: (typeof sig.energy === 'number') ? sig.energy : algoStddev(stats.energy || []),
+      time_ms: timeMs,
+      ors_calls: orsUsed,
+      overpass_calls: opUsed,
+      poi_names: poiNames
+    });
+  });
+
+  return { list, timeMs, orsUsed, opUsed };
+}
+// ★ 総当たり（ゼロAPI評価版）：greedyTopKCandidates + enumerateCombinations + evalByCums を使用
+async function debugBruteforceRunner(cumTotals){
+  const K = 3;  // 各トリガー上位K件だけ使う（必要なら5などに変更）
+  const candGroups = greedyTopKCandidates(restGroups, cumTotals, K);
+  const combos = enumerateCombinations(candGroups, K, 200); // 最大200通りくらい
+
+  const results = combos.map(cmb=>{
+    const ev = evalByCums(restGroups, cmb, cumTotals);
+    return {
+      picksByTrigger: cmb,
+      picks: cmb.filter(Boolean),
+      score: ev.score,
+      stats: ev.stats,
+      sigma: ev.sigma
+    };
+  });
+  return results;
+}
+
+// ★ ビームサーチ：既存 beamSearch をラップ
+async function debugBeamRunner(cumTotals){
+  const triggersWithCand = (restGroups||[]).reduce((n,g)=>{
+    const valid=(g?.pois||[]).filter(p=>p && p._proj && Number.isFinite(p._proj.cumD));
+    return n + (valid.length?1:0);
+  },0);
+
+  const top = beamSearch(restGroups, cumTotals, 3, triggersWithCand, 1e6, true);
+  return top.map(r => ({
+    picksByTrigger: r.picksByTrigger,
+    picks: r.picksByTrigger.filter(Boolean),
+    score: r.score,
+    stats: r.stats,
+    sigma: r.sigma
+  }));
+}
+// ★ 総当たり + ビームサーチ をまとめて実行して dbgAlgoLog に出力
+async function runAlgoDebugAll(){
+  if (!window.__cumTotals || !Array.isArray(restGroups) || !restGroups.length){
+    alert('休憩トリガー＋POIが揃っていません（先に休憩場所検索を実行してください）');
+    return;
+  }
+
+  const logEl = document.getElementById('dbgAlgoLog');
+  const log = (s)=>{ if(logEl) logEl.textContent += s + '\n'; };
+
+  window.__algoCompareRows = []; // 前回の結果をクリア
+
+  const cumTotals = window.__cumTotals;
+
+  log('=== アルゴリズム比較デバッグ開始 ===');
+
+  // 1) 総当たり
+  log('[BRUTE] 実行中...');
+  const brute = await runAlgoWithMeasure('bruteforce','総当たり', ()=>debugBruteforceRunner(cumTotals));
+  log(`[BRUTE] 組合せ=${brute.list.length} 件, 時間=${brute.timeMs.toFixed(1)} ms, ORS=${brute.orsUsed} 回`);
+
+  // 2) ビームサーチ
+  log('[BEAM] 実行中...');
+  const beam = await runAlgoWithMeasure('beam','ビームサーチ', ()=>debugBeamRunner(cumTotals));
+  log(`[BEAM] 候補=${beam.list.length} 件, 時間=${beam.timeMs.toFixed(1)} ms, ORS=${beam.orsUsed} 回`);
+
+  log('=== アルゴリズム比較デバッグ完了（CSVボタンから出力可能） ===');
+
+  // 好きならここで一番良い候補をカード表示
+  // 例: showTop3Combos(beam.list);
+}
+// ★ アルゴリズム比較結果をCSVダウンロード
+function downloadAlgoCompareCsv(){
+  const rows = window.__algoCompareRows || [];
+  if (!rows.length){
+    alert('アルゴリズム比較データがありません（先に「アルゴリズム比較」を実行してください）');
+    return;
+  }
+
+  const esc = s => String(s).replace(/"/g,'""');
+
+  const header = [
+    'algo',
+    'label',
+    'rank',
+    'score',
+    'rawScore',
+    'sigmaDist_km',
+    'sigmaTime_min',
+    'sigmaEnergy_kJ',
+    'time_ms',
+    'ors_calls',
+    'overpass_calls',
+    'poi_names'
+  ];
+
+  const lines = [];
+  lines.push(header.join(','));
+
+  rows.forEach(r=>{
+    lines.push([
+      `"${esc(r.algo)}"`,
+      `"${esc(r.label)}"`,
+      r.rank ?? '',
+      r.score ?? '',
+      r.rawScore ?? '',
+      r.sigmaDist_km ?? '',
+      r.sigmaTime_min ?? '',
+      r.sigmaEnergy_kJ ?? '',
+      r.time_ms ?? '',
+      r.ors_calls ?? '',
+      r.overpass_calls ?? '',
+      `"${esc(r.poi_names ?? '')}"`
+    ].join(','));
+  });
+
+  const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);  // Excel対策
+  const csv = lines.join('\r\n');
+  const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'algo_compare_debug.csv';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 500);
+}
+
 </script>
 </body>
 </html>
+
