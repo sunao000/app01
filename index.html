@@ -681,23 +681,48 @@ $('solveCombBtn').onclick = async () => {
 
 /* ====== 地点管理 ====== */
 function addPoint(p){
-  p.type=pts.length?'':'start';
-  pts.forEach(d=>{if(d.type==='goal')d.type='via';});
+  p.type = pts.length ? '' : 'start';
+  pts.forEach(d => { if (d.type === 'goal') d.type = 'via'; });
   pts.push(p);
-  if(pts.length>1) pts[pts.length-1].type='goal';
+  if (pts.length > 1) pts[pts.length-1].type = 'goal';
   drawList();
 }
-function fixType(){ if(pts[0]) pts[0].type='start'; if(pts.length>1) pts[pts.length-1].type='goal'; }
+
+function fixType(){
+  if (pts[0]) pts[0].type = 'start';
+  if (pts.length > 1) pts[pts.length-1].type = 'goal';
+}
+
 function drawList(){
-  const ul=$('pointList'); ul.innerHTML='';
+  const ul = $('pointList');
+  ul.innerHTML = '';
   pts.forEach((p,i)=>{
-    const li=document.createElement('li'); li.dataset.idx=i;
-    const name = p.name + (p.isRest? '（休憩）':'');
-    li.innerHTML = <span>${name}${p.isRest? ' <small>(' + p.lat.toFixed(5)+','+p.lon.toFixed(5)+')</small>':''}</span><button class="del">×</button>;
-    li.querySelector('.del').onclick=()=>{pts.splice(i,1); fixType(); drawList();};
+    const li = document.createElement('li');
+    li.dataset.idx = i;
+
+    const name = p.name + (p.isRest ? '（休憩）' : '');
+
+    li.innerHTML = `
+      <span>
+        ${name}${
+          p.isRest
+            ? ` <small>(${p.lat.toFixed(5)},${p.lon.toFixed(5)})</small>`
+            : ''
+        }
+      </span>
+      <button class="del">×</button>
+    `;
+
+    li.querySelector('.del').onclick = () => {
+      pts.splice(i,1);
+      fixType();
+      drawList();
+    };
+
     ul.appendChild(li);
   });
 }
+
 
 /* ====== 検索処理（候補表示対応版） ====== */
 async function nomSearch(q){
@@ -2610,6 +2635,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
