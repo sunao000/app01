@@ -2609,7 +2609,7 @@ ${counts || '(none)'}`;
 function downloadAlgoCompareCsv(){
   const rows = window.__algoCompareRows || [];
   if (!rows.length){
-    alert('アルゴリズム比較データがありません（先に「アルゴリズム比較デバッグ」を実行してください）');
+    alert('先にアルゴリズム比較デバッグを実行してください');
     return;
   }
 
@@ -2635,33 +2635,31 @@ function downloadAlgoCompareCsv(){
 
   rows.forEach(r=>{
     lines.push([
-      `"${esc(r.algo ?? '')}"`,
+      r.algo,
       `"${esc(r.label ?? '')}"`,
       r.rank ?? '',
       r.score ?? '',
       r.rawScore ?? '',
-      r.sigmaDist_km ?? r.sigmaDist ?? '',
-      r.sigmaTime_min ?? r.sigmaTime ?? '',
-      r.sigmaEnergy_kJ ?? r.sigmaEnergy ?? '',
-      r.time_ms ?? r.timeMs ?? '',
-      r.ors_calls ?? r.orsCalls ?? '',
-      r.overpass_calls ?? r.overpassCalls ?? '',
-      `"${esc(r.poi_names ?? r.poiNames ?? '')}"`
+      r.sigmaDist_km ?? '',
+      r.sigmaTime_min ?? '',
+      r.sigmaEnergy_kJ ?? '',
+      r.time_ms ?? '',
+      r.ors_calls ?? '',
+      r.overpass_calls ?? '',
+      `"${esc(r.poi_names ?? '')}"`
     ].join(','));
   });
 
-  // UTF-8 BOM 付き & CRLF 改行（Excel 対策）
-  const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
-  const csv = lines.join('\r\n');
-  const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8' });
-
+  const bom = new Uint8Array([0xEF, 0xBB, 0xBF]); // Excel用BOM
+  const blob = new Blob([bom, lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
-  const a = document.createElement('a');
+  const a    = document.createElement('a');
   a.href = url;
   a.download = 'algo_compare_debug.csv';
   a.click();
   setTimeout(()=>URL.revokeObjectURL(url), 500);
 }
+
 
   
 function injectAlgoDebugButtons(cumTotals){
@@ -2910,7 +2908,7 @@ async function runAlgoWithMeasure(name, label, runner){
     const picks = r.picksByTrigger || [];
     const poiNames = picks.map(p=> p ? (p.name || 'POI') : '(null)').join(' -> ');
 
-    const sig = r.sigma || {};
+    const sig   = r.sigma || {};
     const stats = r.stats || {};
 
     window.__algoCompareRows.push({
@@ -2919,8 +2917,9 @@ async function runAlgoWithMeasure(name, label, runner){
       rank: idx + 1,
       score: r.score,
       rawScore: (typeof r.rawScore === 'number') ? r.rawScore : r.score,
-      sigmaDist_km:   (typeof sig.dist === 'number')   ? sig.dist   : algoStddev(stats.dist   || []),
-      sigmaTime_min:  (typeof sig.time === 'number')   ? sig.time   : algoStddev(stats.time   || []),
+      // σ が無ければ stats から再計算
+      sigmaDist_km:   (typeof sig.dist   === 'number') ? sig.dist   : algoStddev(stats.dist   || []),
+      sigmaTime_min:  (typeof sig.time   === 'number') ? sig.time   : algoStddev(stats.time   || []),
       sigmaEnergy_kJ: (typeof sig.energy === 'number') ? sig.energy : algoStddev(stats.energy || []),
       time_ms: timeMs,
       ors_calls: orsUsed,
@@ -3004,7 +3003,9 @@ async function runAlgoDebugAll(){
   }
 
   const logEl = document.getElementById('dbgAlgoLog');
-  if (logEl) logEl.textContent = 'アルゴリズム比較デバッグ実行中...\n';
+  if (logEl) {
+    logEl.textContent = 'アルゴリズム比較デバッグ実行中...\n';
+  }
 
   // 前回の結果をクリア
   window.__algoCompareRows = [];
@@ -3025,7 +3026,7 @@ async function runAlgoDebugAll(){
     () => debugBeamRunner(cumTotals)
   );
 
-// ===== ここから「テキスト整形」部分 =====
+  // ===== ここから「テキスト整形」部分 =====
   const lines = [];
   const fmt    = n => Number(n).toFixed(4);
   const fmtKm  = n => Number(n).toFixed(2);
@@ -3039,12 +3040,8 @@ async function runAlgoDebugAll(){
   const safeSigma = (r) => {
     const s = r.sigma || {};
     const stats = r.stats || {};
-    const sd = (arr)=>{
-      if (!arr || !arr.length) return 0;
-      const m = arr.reduce((a,b)=>a+b,0)/arr.length;
-      const v = arr.reduce((a,x)=>a+(x-m)*(x-m),0)/arr.length;
-      return Math.sqrt(v);
-    };
+    const sd = algoStddev;  // ← さっき定義したやつを使う
+
     return {
       dist:   (typeof s.dist   === 'number') ? s.dist   : sd(stats.dist   || []),
       time:   (typeof s.time   === 'number') ? s.time   : sd(stats.time   || []),
@@ -3064,7 +3061,7 @@ async function runAlgoDebugAll(){
 }
 
 
-  // 共通ブロック出力関数
+  // 共通ブロック出力関数を「中に」定義
   function pushAlgoBlock(title, resultObj){
     const list = resultObj.list || [];
 
@@ -3106,18 +3103,12 @@ async function runAlgoDebugAll(){
   if (logEl) {
     logEl.textContent = lines.join('\n');
   }
-
-  // どこか上の方（stddev が無ければ）に追加
-function algoStddev(arr){
-  if (!arr || !arr.length) return 0;
-  const m = arr.reduce((a,b)=>a+b,0) / arr.length;
-  const v = arr.reduce((s,x)=>s+(x-m)*(x-m),0) / arr.length;
-  return Math.sqrt(v);
 }
 
 </script>
 </body>
 </html>
+
 
 
 
