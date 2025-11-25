@@ -1654,10 +1654,10 @@ function updateRestPoiPanel(){
     const km = (g.rest?.routeD ?? 0) / 1000;
     const head = document.createElement('div');
     head.innerHTML = `
-  <b>休憩トリガー＃${i+1}</b>
-  <span style="color:#666">${km.toFixed(2)} km地点</span>
-  <small>(${(g.rest?.lat ?? 0).toFixed(5)}, ${(g.rest?.lon ?? 0).toFixed(5)})</small>
-`;
+      <b>休憩トリガー＃${i+1}</b>
+      <span style="color:#666">${km.toFixed(2)} km地点</span>
+      <small>(${(g.rest?.lat ?? 0).toFixed(5)}, ${(g.rest?.lon ?? 0).toFixed(5)})</small>
+    `;
     li.appendChild(head);
 
     // 候補POIのUL
@@ -1672,23 +1672,27 @@ function updateRestPoiPanel(){
       ul.appendChild(x);
     } else {
       g.pois.forEach((p) => {
-  const it = document.createElement('li');
-  it.style.padding = '2px 0';
-  const dTrigger = (typeof p.distFromTriggerM === 'number')
-    ?  / トリガー距離 ${formatDist(p.distFromTriggerM)}
-    : '';
-  const dPerp = (p._proj && typeof p._proj.perpM === 'number')
-    ?  / ルート⊥ <b>${formatDist(p._proj.perpM)}</b>
-    : '';
-  it.innerHTML = ・${p.name}　${p.lat.toFixed(5)}　${p.lon.toFixed(5)}${dTrigger}${dPerp};
-  ul.appendChild(it);
-});
+        const it = document.createElement('li');
+        it.style.padding = '2px 0';
+
+        const dTrigger = (typeof p.distFromTriggerM === 'number')
+          ? ` / トリガー距離 ${formatDist(p.distFromTriggerM)}`
+          : '';
+
+        const dPerp = (p._proj && typeof p._proj.perpM === 'number')
+          ? ` / ルート⊥ <b>${formatDist(p._proj.perpM)}</b>`
+          : '';
+
+        it.innerHTML = `・${p.name}　${p.lat.toFixed(5)}　${p.lon.toFixed(5)}${dTrigger}${dPerp}`;
+        ul.appendChild(it);
+      });
     }
 
     li.appendChild(ul);
     ol.appendChild(li);
   });
 }
+
 
 // 組み合わせ表示専用：使用地点だけピンを出す
 function setComboMarkers(start, picksArray, goal){
@@ -2732,6 +2736,7 @@ async function showLinearComboRoute(row){
 </script>
 </body>
 </html>
+
 
 
 
