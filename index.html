@@ -1826,7 +1826,7 @@ header.innerHTML = `
   <div style="font-weight:700;margin-bottom:4px">
     #${rank}　スコア（${metricLabel}）: ${metricValue.toFixed(3)}
     ${typeof r.rawScore === 'number'
-      ? `<span style="color:#777">（総当たり: 補正後=${r.score.toFixed(3)} / 素=${r.rawScore.toFixed(3)}）</span>`
+      ? `<span style="color:#777">（MSE=${r.score.toFixed(3)}）</span>`
       : ''
     }
   </div>
@@ -1956,6 +1956,37 @@ if (bounds && bounds.isValid && bounds.isValid()) {
 
     box.appendChild(wrap);
   });
+}
+
+// 1レグのMSE（距離・時間・エネルギー）
+// ※ すでにどこかに定義済みならそちらを使ってOK
+function legMseCost(d, t, e, ideald, idealt, ideale){
+  const dd = d - ideald;
+  const tt = t - idealt;
+  const ee = e - ideale;
+  return dd*dd + tt*tt + ee*ee;
+}
+
+// stats({dist[], time[], energy[]}) からルート全体のMSEスコアを計算
+function routeMseScoreFromStats(stats, idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg){
+  const dArr = stats.dist   || [];
+  const tArr = stats.time   || [];
+  const eArr = stats.energy || [];
+
+  const n = Math.min(dArr.length, tArr.length, eArr.length);
+  let sum = 0;
+
+  for (let i = 0; i < n; i++){
+    sum += legMseCost(
+      dArr[i],
+      tArr[i],
+      eArr[i],
+      idealDistPerLeg,
+      idealTimePerLeg,
+      idealEnergyPerLeg
+    );
+  }
+  return sum; // 小さいほど「理想ペースに近い」
 }
 
 /* ===== スコアリング（POI評価） ===== */
@@ -2169,7 +2200,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
   const totalEkJ   = Number(cumTotals.E)  || 0;          // kJ
 
   // 「理想値 = 総量 / トリガー数」でOKとする（Naoki指定）
-  const R = T; // トリガー数
+  const R = T + 1; // トリガー数
   const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
   const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
   const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
@@ -2619,6 +2650,22 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     throw new Error('組み合わせ候補が作れませんでした。');
   }
 
+  // ★ 追加：Viterbi と同じ理想1レグ分をここで計算しておく
+  //   - __cumTotals は ensureProjections() でセットされている前提
+  const cumTotals = window.__cumTotals || {};
+  const totalDkm  = (Number(cumTotals.D) || 0) / 1000; // m → km
+  const totalTmin = (Number(cumTotals.T) || 0) / 60;   // s → min
+  const totalEkJ  = Number(cumTotals.E)  || 0;         // kJ
+
+  // トリガー数 = restGroups.length
+  // レグ数 = トリガー数 + 1（start→休憩1, …, 休憩R→goal）
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  const R = T + 1;
+
+  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
+  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
+  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
+
   const results = [];
   let okCount = 0;
   let failCount = 0;
@@ -2637,19 +2684,21 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     try {
       const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
 
-      // 距離/時間/エネルギーの σ からスコアを作る
-      const rawScore = comboScore(stats);
+      // ★ 追加：Viterbi と同じ MSE スコアで評価
+      const mseScore = routeMseScoreFromStats(
+        stats,
+        idealDistPerLeg,
+        idealTimePerLeg,
+        idealEnergyPerLeg
+      );
 
-      // （あれば）POI の重み _w を使って補正
-      const weights  = picks.map(p => Number(p?._w) || 1);
-      const meanW    = weights.length
-        ? (weights.reduce((a,b)=>a+b,0) / weights.length)
-        : 1;
-      const score    = rawScore / Math.max(0.1, meanW);
+      // ※ ここでは _w による補正はせず、そのままMSEのみで比較する
+      const score    = mseScore;
+      const rawScore = mseScore;
 
       results.push({
-        score,           // 補正後スコア（小さいほど良い）
-        rawScore,        // 補正前スコア
+        score,           // MSEスコア（小さいほど「理想ペースに近い」）
+        rawScore,        // 今は score と同じ（CSVなどで使いやすいよう一応残す）
         feature,         // ORS の GeoJSON Feature
         picks,           // 実際に経由した POI の配列
         picksByTrigger: cmb, // トリガーごとの採用状況（null を含み得る）
@@ -3305,4 +3354,3 @@ function drawRestBeams() {
 </script>
 </body>
 </html>
-
