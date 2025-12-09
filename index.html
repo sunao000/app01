@@ -1413,16 +1413,6 @@ async function calcLegStats(feature, mass, flat){
   return {dist:legDist, time:legTime, energy:legEnergy};
 }
 
-// 1区間の距離・時間・エネルギーに対する MSE コスト
-function legMseCost(distKm, timeMin, energyKj, idealD, idealT, idealE){
-  const d = distKm   - idealD;
-  const t = timeMin  - idealT;
-  const e = energyKj - idealE;
-
-  // 今は各要素を等重み（今後 wD, wT, wE を掛けてもOK）
-  return (d*d + t*t + e*e) / 3;
-}
-
 function summaryStats(arr){
   if(!arr.length) return {mean:0,var:0,std:0};
   const m = arr.reduce((a,b)=>a+b,0)/arr.length;
@@ -1959,7 +1949,6 @@ if (bounds && bounds.isValid && bounds.isValid()) {
 }
 
 // 1レグのMSE（距離・時間・エネルギー）
-// ※ すでにどこかに定義済みならそちらを使ってOK
 function legMseCost(d, t, e, ideald, idealt, ideale){
   const dd = d - ideald;
   const tt = t - idealt;
@@ -1969,13 +1958,14 @@ function legMseCost(d, t, e, ideald, idealt, ideale){
 
 // stats({dist[], time[], energy[]}) からルート全体のMSEスコアを計算
 function routeMseScoreFromStats(stats, idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg){
-  const dArr = stats.dist   || [];
-  const tArr = stats.time   || [];
-  const eArr = stats.energy || [];
+  const dArr = stats?.dist   || [];
+  const tArr = stats?.time   || [];
+  const eArr = stats?.energy || [];
 
   const n = Math.min(dArr.length, tArr.length, eArr.length);
-  let sum = 0;
+  if (!n) return NaN; // ← ここがポイント：直線距離など「time/energyなし」は MSE 計算不可
 
+  let sum = 0;
   for (let i = 0; i < n; i++){
     sum += legMseCost(
       dArr[i],
@@ -1988,6 +1978,7 @@ function routeMseScoreFromStats(stats, idealDistPerLeg, idealTimePerLeg, idealEn
   }
   return sum; // 小さいほど「理想ペースに近い」
 }
+
 
 /* ===== スコアリング（POI評価） ===== */
 // ローカルストレージから復元（無ければデフォルト）
@@ -3052,44 +3043,64 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
   if (!Array.isArray(resultList) || !resultList.length) return;
   if (!Array.isArray(window.__algoCompareRows)) window.__algoCompareRows = [];
 
-  // --- 総合スコア（ズレ合計）で並び替え ---
+  // ★ 共通の「理想1レグ分」を計算（総当たり / Viterbi と同じ定義）
+  const cumTotals = window.__cumTotals || {};
+  const totalDkm  = (Number(cumTotals.D) || 0) / 1000; // m → km
+  const totalTmin = (Number(cumTotals.T) || 0) / 60;   // s → min
+  const totalEkJ  = Number(cumTotals.E)  || 0;         // kJ
+
+  const T = Array.isArray(window.restGroups) ? window.restGroups.length : 0;
+  const R = T + 1; // レグ数
+
+  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
+  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
+  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
+
+  // --- MSEベースでソート（取れないときだけ元のscore/rawScoreにフォールバック） ---
   resultList.sort((a, b)=>{
-    const sigA = {
-      dist: stdDev(a.stats?.dist || []),
-      time: stdDev(a.stats?.time || []),
-      energy: stdDev(a.stats?.energy || [])
-    };
-    const sigB = {
-      dist: stdDev(b.stats?.dist || []),
-      time: stdDev(b.stats?.time || []),
-      energy: stdDev(b.stats?.energy || [])
-    };
+    const mseA = (a.stats
+      ? routeMseScoreFromStats(a.stats, idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg)
+      : NaN);
+    const mseB = (b.stats
+      ? routeMseScoreFromStats(b.stats, idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg)
+      : NaN);
 
-    const scoreA =
-      (Number.isFinite(sigA.dist)?sigA.dist:0) +
-      (Number.isFinite(sigA.time)?sigA.time:0) +
-      (Number.isFinite(sigA.energy)?sigA.energy:0);
+    const sA = Number.isFinite(mseA)
+      ? mseA
+      : (a.score ?? a.rawScore ?? Infinity);   // 直線距離など
+    const sB = Number.isFinite(mseB)
+      ? mseB
+      : (b.score ?? b.rawScore ?? Infinity);
 
-    const scoreB =
-      (Number.isFinite(sigB.dist)?sigB.dist:0) +
-      (Number.isFinite(sigB.time)?sigB.time:0) +
-      (Number.isFinite(sigB.energy)?sigB.energy:0);
-
-    return scoreA - scoreB;
+    return sA - sB;
   });
 
   // --- CSVへ格納 ---
   resultList.forEach((r, idx)=>{
     const rank = idx + 1;
 
+    // σ はこれまで通り「参考情報」として残す
     const sigmaDist   = stdDev(r.stats?.dist || []);
     const sigmaTime   = stdDev(r.stats?.time || []);
     const sigmaEnergy = stdDev(r.stats?.energy || []);
 
-    const scoreCombined =
-      (Number.isFinite(sigmaDist)?sigmaDist:0) +
-      (Number.isFinite(sigmaTime)?sigmaTime:0) +
-      (Number.isFinite(sigmaEnergy)?sigmaEnergy:0);
+    // MSE スコアを計算（無理なら NaN）
+    let mseScore = NaN;
+    if (r.stats) {
+      mseScore = routeMseScoreFromStats(
+        r.stats,
+        idealDistPerLeg,
+        idealTimePerLeg,
+        idealEnergyPerLeg
+      );
+    }
+
+    // MSE が取れるアルゴリズム（総当たり / Viterbi / ビーム）は MSE を採用
+    // 線形距離など stats が足りないものは、既存の score/rawScore をそのまま使う
+    const scoreForCsv =
+      Number.isFinite(mseScore)
+        ? mseScore
+        : (r.score ?? r.rawScore ?? 0);
 
     let poiList = (r.picks || r.picksByTrigger || []).filter(Boolean);
     if (Array.isArray(poiList[0])) poiList = poiList.flat().filter(Boolean);
@@ -3105,7 +3116,8 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
       algo: algoCode,
       label,
       rank,
-      score: scoreCombined,
+      score: scoreForCsv,       // ★ ここが「MSEベースのscore」に統一される
+      rawScore: r.rawScore,     // もともと持っているものはそのまま残す（総当たりはMSE）
       sigmaDist,
       sigmaTime,
       sigmaEnergy,
@@ -3117,7 +3129,6 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
     });
   });
 }
-
   
   function showAlgoListInPanel(panel, list, algoCode){
   if (!panel) return;
@@ -3354,3 +3365,4 @@ function drawRestBeams() {
 </script>
 </body>
 </html>
+
