@@ -2457,16 +2457,29 @@ function bindLinearButtonsOnce(){
 
 
 // 休憩トリガーごとに1地点ずつ選ぶ全組み合わせを列挙（上限あり）
-function enumerateCombinations(poiGroups, perGroupLimit = 3, hardCap = 60){
+function enumerateCombinations(poiGroups, perGroupLimit = 3){
   const groups = poiGroups.map(arr => (arr || []).slice(0, perGroupLimit));
   const combos = [];
+
   function dfs(i, acc){
-    if (combos.length >= hardCap) return;
-    if (i === groups.length){ combos.push(acc.slice()); return; }
+    if (i === groups.length){
+      combos.push(acc.slice());
+      return;
+    }
     const g = groups[i];
-    if (!g.length){ acc.push(null); dfs(i+1, acc); acc.pop(); return; }
-    for (const p of g){ if (combos.length >= hardCap) break; acc.push(p); dfs(i+1, acc); acc.pop(); }
+    if (!g.length){
+      acc.push(null);
+      dfs(i+1, acc);
+      acc.pop();
+      return;
+    }
+    for (const p of g){
+      acc.push(p);
+      dfs(i+1, acc);
+      acc.pop();
+    }
   }
+
   dfs(0, []);
   return combos;
 }
@@ -2601,7 +2614,7 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
   const poiGroups = restGroups.map(g => Array.isArray(g.pois) ? g.pois : []);
 
   // POI を perGroupLimit で頭から切り出して、総当たり用のグループに変換
-  const combos = enumerateCombinations(poiGroups, perGroupLimit, 60); // 上限 60 通り
+  const combos = enumerateCombinations(poiGroups, perGroupLimit);
   if (!combos.length){
     throw new Error('組み合わせ候補が作れませんでした。');
   }
@@ -3292,3 +3305,4 @@ function drawRestBeams() {
 </script>
 </body>
 </html>
+
