@@ -239,6 +239,18 @@ function getPoisGroup(g){
 }
 
 // restGroups(形①/②どちらでもOK) → [ [poi...], [poi...], ... ] に統一して返す
+function ensurePoiName(p, a, b){
+  if (!p) return p;
+
+  const n = String(p.name ?? '').trim();
+
+  // ① nameが空 ② "POI" ③ "poi" みたいな仮名 のときは置き換え
+  if (!n || n.toLowerCase() === 'poi') {
+    p.name = `POI${a}.${b}`;
+  }
+  return p;
+}
+
 function makeCandGroupsFromRestGroups(restGroups, cap=5, sorter=null){
   return (restGroups || []).map((g, i)=>{
     const arr = getPoisGroup(g);
@@ -247,14 +259,13 @@ function makeCandGroupsFromRestGroups(restGroups, cap=5, sorter=null){
     const out = arr.slice();
     if (typeof sorter === 'function') out.sort(sorter);
 
-    const picked = out.slice(0, Math.min(cap, out.length));
+    const sliced = out.slice(0, Math.min(cap, out.length));
 
-    // ★追加：このトリガーで採用された候補(0..cap-1)にだけ番号付け
-    for (let b = 0; b < picked.length; b++){
-      ensurePoiName(picked[b], i, b);
-    }
+    // ★ここで確実に名前を付ける
+    const a = i + 1; // トリガー番号（1始まり）
+    sliced.forEach((p, b) => ensurePoiName(p, a, b));
 
-    return picked;
+    return sliced;
   });
 }
 
@@ -4644,3 +4655,4 @@ function isAlgoEnabled(id){
 </script>
 </body>
 </html>
+
