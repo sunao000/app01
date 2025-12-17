@@ -180,6 +180,29 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   </details>
 </div>
 
+<label><input type="checkbox" id="dbg_beam" checked> ビーム</label>
+<label><input type="checkbox" id="dbg_bf" checked> 総当たり</label>
+<label><input type="checkbox" id="dbg_vit" checked> Viterbi</label>
+<label><input type="checkbox" id="dbg_A" checked> 対策A</label>
+<label><input type="checkbox" id="dbg_B" checked> 対策B</label>
+<label><input type="checkbox" id="dbg_C" checked> 対策C</label>
+<label><input type="checkbox" id="dbg_D" checked> 対策D</label>
+
+<label style="display:inline-flex;align-items:center;gap:6px">
+  A/B beamWidth
+  <input id="abBeamWidth" type="number" min="1" step="1" value="40" style="width:72px">
+</label>
+
+<label style="display:inline-flex;align-items:center;gap:6px">
+  A/B topK
+  <input id="abTopK" type="number" min="1" step="1" value="150" style="width:72px">
+</label>
+
+<label style="display:inline-flex;align-items:center;gap:6px">
+  自動調整
+  <input id="abAutoParams" type="checkbox" checked>
+</label>
+
 <!-- サマリー -->
 <div id="summary">
   <div id="routeInfo">未計算</div>
@@ -190,7 +213,8 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 
 <script>
 /* ====== 設定 ====== */
-const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; // ←★OpenRouteService APIキーを入れてください
+// const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
+const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
 const ORS_ROOT = 'https://api.openrouteservice.org';
 
 /* ====== ヘルパ ====== */
@@ -205,6 +229,34 @@ let OVERPASS_CALL_TOTAL = 0;  // Overpass API の累計呼び出し回数
 let restBeamLayer;   // トリガー ↔ POI の道のりビーム用レイヤー
 
 /* ===== 共通ユーティリティ ===== */
+
+// restGroups の要素が
+// 形①: {rest, pois:[...]} でも 形②: [...] でも同じように POI配列を取り出す
+function getPoisGroup(g){
+  if (Array.isArray(g)) return g.filter(Boolean);
+  if (g && Array.isArray(g.pois)) return g.pois.filter(Boolean);
+  return [];
+}
+
+// restGroups(形①/②どちらでもOK) → [ [poi...], [poi...], ... ] に統一して返す
+function makeCandGroupsFromRestGroups(restGroups, cap=5, sorter=null){
+  return (restGroups || []).map((g, i)=>{
+    const arr = getPoisGroup(g);
+    if(!arr.length) throw new Error(`トリガー#${i+1} に候補POIがありません`);
+
+    const out = arr.slice();
+    if (typeof sorter === 'function') out.sort(sorter);
+
+    const picked = out.slice(0, Math.min(cap, out.length));
+
+    // ★追加：このトリガーで採用された候補(0..cap-1)にだけ番号付け
+    for (let b = 0; b < picked.length; b++){
+      ensurePoiName(picked[b], i, b);
+    }
+
+    return picked;
+  });
+}
 
 // HTML要素取得
 function $(id){ return document.getElementById(id); }
@@ -624,7 +676,6 @@ const OVERPASS_MIN_INTERVAL = 1800; // 1.8s（必要なら 2000～2500 まで上
 let __overpassLastTs = 0;
 const __overpassCache = new Map();  // key=query文字列, value=JSON
 
-function $(id){return document.getElementById(id);}
 function formatDist(m){return (m/1000).toFixed(2)+' km';}
 function formatDur(s){const m=Math.round(s/60);return m<60? m+' 分' : (Math.floor(m/60)+' 時間 '+(m%60)+' 分');}
 
@@ -1146,7 +1197,6 @@ tEnd(tkPOI, `found=${pois.length}`);
   // ★ ここで今回使った回数と累計を「最後の行」として出す
   const usedThisTime = OVERPASS_CALL_TOTAL - overpassBefore;
   logRest(`--- Overpass API 呼び出し: 今回 ${usedThisTime} 回 / 累計 ${OVERPASS_CALL_TOTAL} 回 ---`);
-  
 }
 
     }
@@ -1815,8 +1865,8 @@ const metricValue = (metric === 'time') ? sig.time
 header.innerHTML = `
   <div style="font-weight:700;margin-bottom:4px">
     #${rank}　スコア（${metricLabel}）: ${metricValue.toFixed(3)}
-    ${typeof r.rawScore === 'number'
-      ? `<span style="color:#777">（MSE=${r.score.toFixed(3)}）</span>`
+    ${Number.isFinite(r.score)
+      ? `<span style="color:#777">（MSE=${Number(r.score).toFixed(3)}）</span>`
       : ''
     }
   </div>
@@ -1949,12 +1999,17 @@ if (bounds && bounds.isValid && bounds.isValid()) {
 }
 
 // 1レグのMSE（距離・時間・エネルギー）
-function legMseCost(d, t, e, ideald, idealt, ideale){
-  const dd = d - ideald;
-  const tt = t - idealt;
+// function legMseCost(d, t, e, ideald, idealt, ideale){
+//   const dd = d - ideald;
+//   const tt = t - idealt;
+//   const ee = e - ideale;
+//   return dd*dd + tt*tt + ee*ee;
+// }
+  function legMseCost(d, t, e, ideald, idealt, ideale){
   const ee = e - ideale;
-  return dd*dd + tt*tt + ee*ee;
+  return ee*ee;
 }
+
 
 // stats({dist[], time[], energy[]}) からルート全体のMSEスコアを計算
 function routeMseScoreFromStats(stats, idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg){
@@ -2054,6 +2109,8 @@ function topPoisPerTriggerForLinear(maxPer=5){
   });
 }
 
+
+
 // 2点間の地上距離（m）
 function llDist(a,b){
   return L.latLng(a.lat, a.lon).distanceTo([b.lat, b.lon]);
@@ -2134,42 +2191,64 @@ function buildLinearAlgoRows(start, goal, groups, hardCap = 200000) {
 //   - 返り値   : { total, distKm, timeMin, energyKj }
 //     ※ total は後方互換用（今後は使わず、MSEで評価）
 // ======================================================
+// async function calcLegCostWithApi(from, to, profile){
+//   if (!from || !to) {
+//     throw new Error('calcLegCostWithApi: from/to が不正です');
+//   }
+
+//   const wps = [
+//     {
+//       lat: from.lat ?? from.latitude  ?? from.y,
+//       lon: from.lon ?? from.longitude ?? from.x
+//     },
+//     {
+//       lat: to.lat   ?? to.latitude    ?? to.y,
+//       lon: to.lon   ?? to.longitude   ?? to.x
+//     }
+//   ];
+
+//   // 既に使っている ORS ヘルパーを流用
+//   const out = await routeLegStatsForWaypoints(wps, profile);
+//   const feature = out?.feature;
+//   const summary = feature?.properties?.summary || {};
+
+//   const distM = Number(summary.distance) || 0;   // m
+//   const timeS = Number(summary.duration) || 0;   // s
+
+//   const distKm  = distM / 1000;
+//   const timeMin = timeS / 60;
+
+//   // ★ 既存のエネルギー計算ロジックを利用（stepごとに energyStepKJ）
+//   const mass = 75;   // 他の箇所と合わせる
+//   const flat = 18;
+//   const energyKj = await totalEnergyKJ(feature, mass, flat); // kJ
+
+//   // total は後方互換用：とりあえず距離ベース
+//   const total = distKm;
+
+//   return { total, distKm, timeMin, energyKj };
+// }
 async function calcLegCostWithApi(from, to, profile){
-  if (!from || !to) {
-    throw new Error('calcLegCostWithApi: from/to が不正です');
-  }
+  if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
 
   const wps = [
-    {
-      lat: from.lat ?? from.latitude  ?? from.y,
-      lon: from.lon ?? from.longitude ?? from.x
-    },
-    {
-      lat: to.lat   ?? to.latitude    ?? to.y,
-      lon: to.lon   ?? to.longitude   ?? to.x
-    }
+    { lat: from.lat ?? from.latitude ?? from.y, lon: from.lon ?? from.lng ?? from.longitude ?? from.x },
+    { lat: to.lat   ?? to.latitude   ?? to.y, lon: to.lon   ?? to.lng ?? to.longitude   ?? to.x }
   ];
 
-  // 既に使っている ORS ヘルパーを流用
   const out = await routeLegStatsForWaypoints(wps, profile);
-  const feature = out?.feature;
-  const summary = feature?.properties?.summary || {};
+  const summary = out?.feature?.properties?.summary || {};
 
-  const distM = Number(summary.distance) || 0;   // m
-  const timeS = Number(summary.duration) || 0;   // s
+  const distKm  = (Number(summary.distance) || 0) / 1000;
+  const timeMin = (Number(summary.duration) || 0) / 60;
 
-  const distKm  = distM / 1000;
-  const timeMin = timeS / 60;
+  // ★ 2点でも energy 配列が複数要素/0要素になる可能性があるので sum を基本にする
+  let energyKj = sumNums(out?.stats?.energy);
 
-  // ★ 既存のエネルギー計算ロジックを利用（stepごとに energyStepKJ）
-  const mass = 75;   // 他の箇所と合わせる
-  const flat = 18;
-  const energyKj = await totalEnergyKJ(feature, mass, flat); // kJ
+  // ★ dp を壊さない：NaNやInfinityは0に倒す（または距離から近似でもOK）
+  if (!Number.isFinite(energyKj)) energyKj = 0;
 
-  // total は後方互換用：とりあえず距離ベース
-  const total = distKm;
-
-  return { total, distKm, timeMin, energyKj };
+  return { total: distKm, distKm, timeMin, energyKj };
 }
 
 // Viterbi（API利用版）
@@ -2184,17 +2263,10 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     return [];
   }
 
-  // ★ 追加：スタート→ゴールの総量と、理想1レグ分
-  const cumTotals = window.__cumTotals || {};
-  const totalDkm   = (Number(cumTotals.D) || 0) / 1000;  // m → km
-  const totalTmin  = (Number(cumTotals.T) || 0) / 60;    // s → min
-  const totalEkJ   = Number(cumTotals.E)  || 0;          // kJ
-
-  // 「理想値 = 総量 / トリガー数」でOKとする（Naoki指定）
-  const R = T + 1; // トリガー数
-  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
-  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
-  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
+  const ideals = getIdealPerLegs();
+  const idealDistPerLeg   = ideals.idealDistPerLeg;
+  const idealTimePerLeg   = ideals.idealTimePerLeg;
+  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
 
   const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
   if (Klist.some(k => !Number.isInteger(k) || k <= 0)) {
@@ -2312,29 +2384,44 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
   }
 
   // ★ ルート全体の stats を1回だけ計算（σ表示やCSV用）
-  let feature = null;
-  let stats   = { dist:[], time:[], energy:[] };
-  try {
-    const wps = [start, ...picks, goal].map(p => ({
-      lat: p.lat,
-      lon: p.lon,
-      name: p.name || 'POI'
-    }));
-    const out = await routeLegStatsForWaypoints(wps, profile);
-    feature = out.feature;
-    if (out.stats) stats = out.stats;
-  } catch (e) {
-    console.warn('[Viterbi] 統計計算用ルート生成に失敗', e);
-  }
+let feature = null;
+let stats   = { dist:[], time:[], energy:[] };
+let finalScore = bestFinalCost; // ← フォールバック（stats取れない時）
 
-  return [{
-    score:    bestFinalCost,   // 合計MSE（小さいほど「理想ペースに近い」）
-    rawScore: bestFinalCost,
-    feature,
-    stats,
-    picks,
-    picksByTrigger: picks
-  }];
+try {
+  const wps = [start, ...picks, goal].map(p => ({
+    lat: p.lat,
+    lon: p.lon,
+    name: p.name || 'POI'
+  }));
+
+  const out = await routeLegStatsForWaypoints(wps, profile);
+  feature = out?.feature || null;
+  if (out?.stats) stats = out.stats;
+
+  // // ★ここが本命：総当たりと同じ「総量MSE」を最終スコアにする
+  // const exactMse = routeMseScoreFromStats(
+  //   stats,
+  //   idealDistPerLeg,
+  //   idealTimePerLeg,
+  //   idealEnergyPerLeg
+  // );
+  // if (Number.isFinite(exactMse)) finalScore = exactMse;
+const exact = finalScoreFromStats(stats, { idealEnergyPerLeg });
+if (Number.isFinite(exact)) finalScore = exact;
+
+} catch (e) {
+  console.warn('[Viterbi] 統計計算用ルート生成に失敗', e);
+}
+
+return [{
+  score:    finalScore,     // ★総当たりと同じ土俵のスコア
+  rawScore: bestFinalCost,  // ★DPで積んだ近似（比較・デバッグ用に残す）
+  feature,
+  stats,
+  picks,
+  picksByTrigger: picks
+}];
 }
 
 // 表示とCSV出力
@@ -2440,7 +2527,7 @@ function bindLinearButtonsOnce(){
   calcBtn.onclick = ()=>{
     try{
       const {start, goal} = getStartGoalPoints();
-      const groups = topPoisPerTriggerForLinear(5); // 各トリガー最大5件
+      const groups = makeCandGroupsFromRestGroups(restGroups, 5, defaultLinearSorter);
       // 総組合せチェック（多すぎる場合は注意だけ出す）
       const total = groups.reduce((a,b)=>a*b.length,1);
       if(total > 200000){
@@ -2641,21 +2728,11 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     throw new Error('組み合わせ候補が作れませんでした。');
   }
 
-  // ★ 追加：Viterbi と同じ理想1レグ分をここで計算しておく
-  //   - __cumTotals は ensureProjections() でセットされている前提
-  const cumTotals = window.__cumTotals || {};
-  const totalDkm  = (Number(cumTotals.D) || 0) / 1000; // m → km
-  const totalTmin = (Number(cumTotals.T) || 0) / 60;   // s → min
-  const totalEkJ  = Number(cumTotals.E)  || 0;         // kJ
-
-  // トリガー数 = restGroups.length
-  // レグ数 = トリガー数 + 1（start→休憩1, …, 休憩R→goal）
+   const ideals = getIdealPerLegs();
+  const idealDistPerLeg   = ideals.idealDistPerLeg;
+  const idealTimePerLeg   = ideals.idealTimePerLeg;
+  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
   const T = Array.isArray(restGroups) ? restGroups.length : 0;
-  const R = T + 1;
-
-  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
-  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
-  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
 
   const results = [];
   let okCount = 0;
@@ -2675,17 +2752,22 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     try {
       const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
 
-      // ★ 追加：Viterbi と同じ MSE スコアで評価
-      const mseScore = routeMseScoreFromStats(
-        stats,
-        idealDistPerLeg,
-        idealTimePerLeg,
-        idealEnergyPerLeg
-      );
+      // // ★ 追加：Viterbi と同じ MSE スコアで評価
+      // const mseScore = routeMseScoreFromStats(
+      //   stats,
+      //   idealDistPerLeg,
+      //   idealTimePerLeg,
+      //   idealEnergyPerLeg
+      // );
 
-      // ※ ここでは _w による補正はせず、そのままMSEのみで比較する
-      const score    = mseScore;
-      const rawScore = mseScore;
+      // // ※ ここでは _w による補正はせず、そのままMSEのみで比較する
+      // const score    = mseScore;
+      // const rawScore = mseScore;
+
+      const eScore = routeEnergyMseFromStats(stats, idealEnergyPerLeg);
+const score    = eScore;
+const rawScore = eScore;
+
 
       results.push({
         score,           // MSEスコア（小さいほど「理想ペースに近い」）
@@ -2720,21 +2802,20 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
 //   - 総当たり（API多め）
 //   - 直線距離（全組合せ・ゼロAPI）
 //   - Viterbi（API利用・DP）
+//   - 対策A: Viterbi TopK → 総量MSEで再ランキング（API）
+//   - 対策B: Viterbi（L1加法・API）
+// ======================================================
+// ======================================================
+// アルゴリズム比較デバッグ本体（ON/OFF切替対応）
 // ======================================================
 async function runAlgoCompareDebug(){
   const panel = $('algoComparePanel');
   panel.textContent = '';
 
-  // 関数全体の時間計測開始
   const tAll0 = performance.now();
-
-  // CSV 用バッファ初期化
   window.__algoCompareRows = [];
 
   try {
-    // -----------------------------
-    // 前提チェック
-    // -----------------------------
     if (!routeData || !routeData.fastest) {
       panel.textContent = '先に「休憩場所検索」でルート＋POIを生成してください。';
       return;
@@ -2744,197 +2825,432 @@ async function runAlgoCompareDebug(){
       return;
     }
 
-    // 射影などの前処理
     ensureProjections();
     const cumTotals = window.__cumTotals;
 
-    // Start / Goal / profile
     const start = pts.find(p => p.type === 'start') || pts[0];
     const goal  = pts.find(p => p.type === 'goal')  || pts[pts.length - 1];
     const profile = 'cycling-road';
 
     panel.textContent += '====== アルゴリズム比較デバッグ ======\n\n';
 
-    // ----------------------------------------------------------
-    // 1）ビームサーチ（ゼロAPI）
-    // ----------------------------------------------------------
-    panel.textContent += '--- ビームサーチ（幅3・ゼロAPI） ---\n';
-
-    const orsBeforeBeam = API_USED.orsTotal;
-    const ovpBeforeBeam = API_USED.overpassTotal;
-
-    const tBeam0 = performance.now();
-    const beamList = runBeamSearchOnce(restGroups, cumTotals);  // 同期想定
-    const tBeam1 = performance.now();
-    const beamMs = tBeam1 - tBeam0;
-
-    const beamOrs = API_USED.orsTotal      - orsBeforeBeam;
-    const beamOv  = API_USED.overpassTotal - ovpBeforeBeam;
-
-    panel.textContent += `処理時間: ${beamMs.toFixed(1)} ms\n`;
-    panel.textContent += `ORS呼び出し: ${beamOrs} 回\n`;
-    panel.textContent += `Overpass呼び出し: ${beamOv} 回\n\n`;
-
-    // 上位3件をUIに表示
-    showAlgoListInPanel(panel, beamList, 'beam3');
-
-    // CSV（上位3件のみ）
-    pushAlgoResultsForCsv(
-      'beam3',
-      'ビームサーチ（幅3）',
-      beamList.slice(0, 3),
-      beamMs,
-      beamOrs,
-      beamOv
-    );
+    // bf_rank 用
+    let bfList = [];
+    let bfRankMap = null;
 
     // ----------------------------------------------------------
-    // 2）総当たり（API多め・高精度）
+    // 1）総当たり（API多め・高精度） => bfRankMap を作る
     // ----------------------------------------------------------
-    panel.textContent += '\n--- 総当たり（API多め・高精度） ---\n';
+    if (isAlgoEnabled('dbg_bf')) {
+      panel.textContent += '\n--- 総当たり（API多め・高精度） ---\n';
+      {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
 
-    const orsBeforeBF = API_USED.orsTotal;
-    const ovpBeforeBF = API_USED.overpassTotal;
+        const t0 = performance.now();
+        bfList = await runBruteforceOnce(start, goal, restGroups, profile);
+        const t1 = performance.now();
 
-    const tBF0 = performance.now();
-    const bfList = await runBruteforceOnce(start, goal, restGroups, profile);
-    const tBF1 = performance.now();
-    const bfMs = tBF1 - tBF0;
+        const ms = t1 - t0;
+        const ors = API_USED.orsTotal - orsBefore;
+        const ov  = API_USED.overpassTotal - ovpBefore;
 
-    const bfOrs = API_USED.orsTotal      - orsBeforeBF;
-    const bfOv  = API_USED.overpassTotal - ovpBeforeBF;
+        panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+        panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+        panel.textContent += `Overpass呼び出し: ${ov} 回\n`;
+        panel.textContent += `組合せ数: ${bfList.length} 件\n\n`;
 
-    panel.textContent += `処理時間: ${bfMs.toFixed(1)} ms\n`;
-    panel.textContent += `ORS呼び出し: ${bfOrs} 回\n`;
-    panel.textContent += `Overpass呼び出し: ${bfOv} 回\n`;
-    panel.textContent += `組合せ数: ${bfList.length} 件\n\n`;
+        bfRankMap = buildBfRankMap(bfList);
+        attachBfRank(bfList, bfRankMap);
 
-    // 上位3件をUIに表示
-    showAlgoListInPanel(panel, bfList, 'bruteforce');
+        showAlgoListInPanel(panel, bfList, 'bruteforce');
+        pushAlgoResultsForCsv('bruteforce','総当たり',bfList,ms,ors,ov);
+      }
+    } else {
+      panel.textContent += '\n--- 総当たり：OFF（bf_rank未計算） ---\n';
+    }
 
-    // CSV（総当たりは全件）
-    pushAlgoResultsForCsv(
-      'bruteforce',
-      '総当たり',
-      bfList,
-      bfMs,
-      bfOrs,
-      bfOv
-    );
+    // ----------------------------------------------------------
+    // 2）ビームサーチ（ゼロAPI）
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_beam')) {
+      panel.textContent += '\n--- ビームサーチ（幅3・ゼロAPI） ---\n';
+      {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        const t0 = performance.now();
+        const beamList = runBeamSearchOnce(restGroups, cumTotals);
+        const t1 = performance.now();
+
+        const ms = t1 - t0;
+        const ors = API_USED.orsTotal - orsBefore;
+        const ov  = API_USED.overpassTotal - ovpBefore;
+
+        // bf ONのときだけ付く（OFFなら何もしない）
+        attachBfRank(beamList, bfRankMap);
+
+        panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+        panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+        panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+        showAlgoListInPanel(panel, beamList, 'beam3');
+        pushAlgoResultsForCsv('beam3','ビームサーチ（幅3）',beamList.slice(0,3),ms,ors,ov);
+      }
+    }
 
     // ----------------------------------------------------------
     // 3）直線距離（全組合せ・ゼロAPI）
     // ----------------------------------------------------------
-    panel.textContent += '\n--- 直線距離（全組み合わせ・ゼロAPI） ---\n';
+    if (isAlgoEnabled('dbg_linear')) {
+      panel.textContent += '\n--- 直線距離（全組み合わせ・ゼロAPI） ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
 
-    try {
-      const orsBeforeLin = API_USED.orsTotal;
-      const ovpBeforeLin = API_USED.overpassTotal;
+        const t0 = performance.now();
+        const groups = topPoisPerTriggerForLinear(5);
 
-      const tLin0 = performance.now();
-
-      // 各トリガーごとに「上位POI 5件まで」の配列を作成
-      // [ [T1 の POI...], [T2 の POI...], ... ]
-      const groups = topPoisPerTriggerForLinear(5);
-
-      if (!groups || !groups.length) {
-        panel.textContent += '(候補なし)\n';
-      } else {
-        // 全組合せの直線距離などをまとめた rows を構築
-        // rows[i] = { picks: [...], km, stats:{dist:[],time:[],energy:[]}, ... }
-        const linearRows = buildLinearAlgoRows(start, goal, groups);
-
-        const tLin1 = performance.now();
-        const linMs = tLin1 - tLin0;
-
-        const linOrs = API_USED.orsTotal      - orsBeforeLin;
-        const linOv  = API_USED.overpassTotal - ovpBeforeLin;
-
-        // 後で別処理（専用UIなど）で使いたい場合に保持
-        window.__linearResults = linearRows;
-
-        panel.textContent += `組合せ数: ${linearRows.length} 件\n`;
-        panel.textContent += `処理時間: ${linMs.toFixed(1)} ms\n`;
-        panel.textContent += `ORS呼び出し: ${linOrs} 回\n`;
-        panel.textContent += `Overpass呼び出し: ${linOv} 回\n\n`;
-
-        // UIには上位3件だけ表示
-        showAlgoListInPanel(panel, linearRows.slice(0, 3), 'linear');
-
-        // CSVには全組合せを記録
-        pushAlgoResultsForCsv(
-          'linear',
-          '直線距離（全組合せ）',
-          linearRows,
-          linMs,
-          linOrs,
-          linOv
-        );
-      }
-    } catch (errLin) {
-      console.error('[linear] 直線距離計算でエラー', errLin);
-      panel.textContent += '\n[直線距離計算エラー] ' + (errLin.message || errLin) + '\n';
-    }
-
-    // ----------------------------------------------------------
-    // 4）Viterbi（API利用・DP）
-    // ----------------------------------------------------------
-    panel.textContent += '\n--- Viterbi（API利用・DP） ---\n';
-
-    try {
-      const orsBeforeVit = API_USED.orsTotal;
-      const ovpBeforeVit = API_USED.overpassTotal;
-
-      // 直線距離と同じく「各トリガー最大5件」の候補を使う
-      const vitGroups = topPoisPerTriggerForLinear(5);
-
-      if (!vitGroups || !vitGroups.length) {
-        panel.textContent += '(候補なし)\n';
-      } else {
-        const tVit0 = performance.now();
-        // restGroups ではなく「POI配列の配列」を渡す
-        const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
-        const tVit1 = performance.now();
-        const vitMs = tVit1 - tVit0;
-
-        const vitOrs = API_USED.orsTotal      - orsBeforeVit;
-        const vitOv  = API_USED.overpassTotal - ovpBeforeVit;
-
-        if (!vitList || !vitList.length) {
+        if (!groups || !groups.length) {
           panel.textContent += '(候補なし)\n';
         } else {
-          panel.textContent += `処理時間: ${vitMs.toFixed(1)} ms\n`;
-          panel.textContent += `ORS呼び出し: ${vitOrs} 回\n`;
-          panel.textContent += `Overpass呼び出し: ${vitOv} 回\n\n`;
+          const linearRows = buildLinearAlgoRows(start, goal, groups);
+          const t1 = performance.now();
 
-          // UI表示
-          showAlgoListInPanel(panel, vitList, '');
+          const ms = t1 - t0;
+          const ors = API_USED.orsTotal - orsBefore;
+          const ov  = API_USED.overpassTotal - ovpBefore;
 
-          // CSV記録
-          pushAlgoResultsForCsv(
-            '',
-            'ビタビ（API・DP）',
-            vitList,
-            vitMs,
-            vitOrs,
-            vitOv
-          );
+          window.__linearResults = linearRows;
+
+          attachBfRank(linearRows, bfRankMap);
+
+          panel.textContent += `組合せ数: ${linearRows.length} 件\n`;
+          panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+          panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+          panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+          showAlgoListInPanel(panel, linearRows.slice(0, 3), 'linear');
+          pushAlgoResultsForCsv('linear','直線距離（全組合せ）',linearRows,ms,ors,ov);
         }
+      } catch (e) {
+        console.error('[linear] error', e);
+        panel.textContent += '\n[直線距離計算エラー] ' + (e.message || e) + '\n';
       }
-    } catch (errVit) {
-      console.error('[] エラー', errVit);
-      panel.textContent += '\n[エラー] ' + (errVit.message || errVit) + '\n';
     }
 
     // ----------------------------------------------------------
-    // 関数全体の処理時間
+    // 4）Viterbi（API利用・DP：MSEのみ）
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_vit')) {
+      panel.textContent += '\n--- Viterbi（API利用・DP：MSEのみ） ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
+        const vitGroups = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
+
+        if (!vitGroups || !vitGroups.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          const t0 = performance.now();
+          const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
+          const t1 = performance.now();
+
+          const ms  = t1 - t0;
+          const ors = API_USED.orsTotal - orsBefore;
+          const ov  = API_USED.overpassTotal - ovpBefore;
+
+          if (!vitList || !vitList.length) {
+            panel.textContent += '(候補なし)\n';
+          } else {
+            attachBfRank(vitList, bfRankMap);
+
+            panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+            panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+            panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+            showAlgoListInPanel(panel, vitList, 'viterbi');
+            pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
+          }
+        }
+      } catch (e) {
+        console.error('[viterbi] error', e);
+        panel.textContent += '\n[viterbi エラー] ' + (e.message || e) + '\n';
+      }
+    }
+
+    // ----------------------------------------------------------
+    // 5）対策A：TopK増 + beamWidth増（再ランキング）
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_A')) {
+      panel.textContent += '\n--- 対策A：Viterbi TopK→総量MSE再ランキング（API） ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        const groupsA = makeCandGroupsFromRestGroups(restGroups, 5, defaultLinearSorter);
+
+        if (!groupsA || !groupsA.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          const t0 = performance.now();
+          const aOpt  = getAbViterbiOpt();
+          const aList = await runViterbiTopK_Rerank_All_API(start, goal, groupsA, profile, aOpt);
+          const t1 = performance.now();
+
+          const ms = t1 - t0;
+          const ors = API_USED.orsTotal - orsBefore;
+          const ov  = API_USED.overpassTotal - ovpBefore;
+
+          if (!aList || !aList.length) {
+            panel.textContent += '(候補なし)\n';
+          } else {
+            attachBfRank(aList, bfRankMap);
+
+            panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+            panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+            panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+            showAlgoListInPanel(panel, aList.slice(0,3), 'viterbi_topk_rerank');
+            pushAlgoResultsForCsv(
+              'viterbi_topk_rerank',
+              '対策A：Viterbi TopK→総量MSE再ランキング',
+              aList, ms, ors, ov
+            );
+          }
+        }
+      } catch (e) {
+        console.error('[viterbi_topk_rerank] error', e);
+        panel.textContent += '\n[対策A エラー] ' + (e.message || e) + '\n';
+      }
+    }
+
+    // ----------------------------------------------------------
+    // 6）対策B：A + 重複排除（再ランキング）
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_B')) {
+      panel.textContent += '\n--- 対策B：Viterbi（L1加法・API） ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        const groupsB = makeCandGroupsFromRestGroups(restGroups, 5, defaultLinearSorter);
+
+        if (!groupsB || !groupsB.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          const t0 = performance.now();
+          const bOpt  = getAbViterbiOpt();
+          const bList = await runViterbiTopK_Rerank_All_API_Dedupe(start, goal, groupsB, profile, bOpt);
+          const t1 = performance.now();
+
+          const ms = t1 - t0;
+          const ors = API_USED.orsTotal - orsBefore;
+          const ov  = API_USED.overpassTotal - ovpBefore;
+
+          if (!bList || !bList.length) {
+            panel.textContent += '(候補なし)\n';
+          } else {
+            attachBfRank(bList, bfRankMap);
+
+            panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+            panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+            panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+            showAlgoListInPanel(panel, bList.slice(0,3), 'viterbi_l1');
+            pushAlgoResultsForCsv('viterbi_l1','対策B：Viterbi（L1加法）',bList,ms,ors,ov);
+          }
+        }
+      } catch (e) {
+        console.error('[viterbi_l1] error', e);
+        panel.textContent += '\n[対策B エラー] ' + (e.message || e) + '\n';
+      }
+    }
+
+    // ----------------------------------------------------------
+    // 7）対策C
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_C')) {
+      panel.textContent += '\n--- 対策C：Viterbi（端除外 + 端トリガー条件経由） ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
+        const groupsC = makeCandGroupsFromRestGroups(restGroups, capPerTrigger)
+          .map(g => Array.isArray(g) ? g.filter(Boolean) : [])
+          .filter(g => g.length > 0);
+
+        if (!groupsC || !groupsC.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          const t0 = performance.now();
+
+          // ここはあなたが使ってるC関数に合わせてOK（今は BeamFull を呼んでる形）
+          const cList = await runViterbiOnce_API_C_BeamFull(start, goal, groupsC, profile, {
+            beamWidth: 12
+          });
+
+          const t1 = performance.now();
+          const ms  = t1 - t0;
+          const ors = API_USED.orsTotal - orsBefore;
+          const ov  = API_USED.overpassTotal - ovpBefore;
+
+          if (!cList || !cList.length) {
+            panel.textContent += '(候補なし)\n';
+          } else {
+            attachBfRank(cList, bfRankMap);
+
+            panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+            panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+            panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+            showAlgoListInPanel(panel, cList, 'viterbi_c');
+            pushAlgoResultsForCsv('viterbi_c','対策C：端除外Viterbi + 端トリガー条件経由',cList,ms,ors,ov);
+          }
+        }
+      } catch (e) {
+        console.error('[viterbi_c] error', e);
+        panel.textContent += '\n[対策C エラー] ' + (e.message || e) + '\n';
+      }
+    }
+
+    // ----------------------------------------------------------
+    // 8）対策D：段階的に固定解除してViterbi
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_D')) {
+      panel.textContent += '\n--- 対策D：段階的に固定解除してViterbi ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        const t0 = performance.now();
+        const prog = await runViterbi_D_Progressive(start, goal, restGroups, profile, {
+          capPerTrigger: 5,
+          sorter: defaultLinearSorter
+        });
+        const t1 = performance.now();
+
+        const ms  = t1 - t0;
+        const ors = API_USED.orsTotal - orsBefore;
+        const ov  = API_USED.overpassTotal - ovpBefore;
+
+        const last = prog[prog.length - 1]?.best ? [prog[prog.length - 1].best] : [];
+
+        panel.textContent += `段階数: ${prog.length}\n`;
+        panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+        panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+        panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+        if (last.length){
+          attachBfRank(last, bfRankMap);
+
+          showAlgoListInPanel(panel, last, 'viterbi_D_prog');
+          pushAlgoResultsForCsv('viterbi_D_prog','対策D：段階的固定解除Viterbi', last, ms, ors, ov);
+        } else {
+          panel.textContent += '(候補なし)\n';
+        }
+
+      } catch (e) {
+        console.error('[viterbi_D_prog] error', e);
+        panel.textContent += '\n[対策D エラー] ' + (e.message || e) + '\n';
+      }
+    }
+
+    // ----------------------------------------------------------
+    // 9）対策E：Viterbi（2点DP）+区間キャッシュ
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_E')) {
+      panel.textContent += '\n--- 対策E：Viterbi（2点DP + 区間キャッシュ） ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        if (window.__legCache && typeof window.__legCache.clear === 'function'){
+          window.__legCache.clear(); // 測定を綺麗にしたいなら
+        } else if (typeof __legCache !== 'undefined' && __legCache?.clear){
+          __legCache.clear();
+        }
+
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
+        const groupsE = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
+
+        const t0 = performance.now();
+        const eList = await runViterbiOnce_API_E_Cached(start, goal, groupsE, profile);
+        const t1 = performance.now();
+
+        const ms  = t1 - t0;
+        const ors = API_USED.orsTotal - orsBefore;
+        const ov  = API_USED.overpassTotal - ovpBefore;
+
+        if (!eList || !eList.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          attachBfRank(eList, bfRankMap);
+
+          panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+          panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+          panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+          showAlgoListInPanel(panel, eList, 'viterbi_E_cache');
+          pushAlgoResultsForCsv('viterbi_E_cache','対策E：Viterbi（2点DP + キャッシュ）',eList,ms,ors,ov);
+        }
+      } catch (e) {
+        console.error('[viterbi_E_cache] error', e);
+        panel.textContent += '\n[対策E エラー] ' + (e.message || e) + '\n';
+      }
+    }
+
+    // ----------------------------------------------------------
+    // 10）対策F：TopK候補→一気に経由地付きORSで再評価（全件）
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_F')) {
+      panel.textContent += '\n--- 対策F：TopK候補→一気に経由地付きORSで再評価 ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
+
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
+        const groupsF = makeCandGroupsFromRestGroups(restGroups, capPerTrigger, defaultLinearSorter);
+
+        const t0 = performance.now();
+        const fOpt = getAbViterbiOpt(); // A/BのUI流用
+        const fList = await runViterbi_F_TopN_ThenFullORS(start, goal, groupsF, profile, fOpt);
+        const t1 = performance.now();
+
+        const ms  = t1 - t0;
+        const ors = API_USED.orsTotal - orsBefore;
+        const ov  = API_USED.overpassTotal - ovpBefore;
+
+        if (!fList || !fList.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          attachBfRank(fList, bfRankMap);
+
+          panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+          panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+          panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+          showAlgoListInPanel(panel, fList.slice(0,3), 'viterbi_F_fullrerank');
+          pushAlgoResultsForCsv('viterbi_F_fullrerank','対策F：TopK→一気にORS再評価',fList,ms,ors,ov);
+        }
+      } catch (e) {
+        console.error('[viterbi_F_fullrerank] error', e);
+        panel.textContent += '\n[対策F エラー] ' + (e.message || e) + '\n';
+      }
+    }
+
+    // ----------------------------------------------------------
+    // 全体時間
     // ----------------------------------------------------------
     const totalMs = performance.now() - tAll0;
     panel.textContent += `\n====== 全アルゴリズム処理時間: ${totalMs.toFixed(1)} ms ======\n`;
 
   } catch (err) {
     console.error('[runAlgoCompareDebug] エラー', err);
-    panel.textContent += '\n[エラー] ' + (err.message || err);
+    panel.textContent += '\n[runAlgoCompareDebug エラー] ' + (err.message || err);
   }
 }
   
@@ -3043,72 +3359,24 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
   if (!Array.isArray(resultList) || !resultList.length) return;
   if (!Array.isArray(window.__algoCompareRows)) window.__algoCompareRows = [];
 
-  // ★ 共通の「理想1レグ分」を計算（総当たり / Viterbi と同じ定義）
-  const cumTotals = window.__cumTotals || {};
-  const totalDkm  = (Number(cumTotals.D) || 0) / 1000; // m → km
-  const totalTmin = (Number(cumTotals.T) || 0) / 60;   // s → min
-  const totalEkJ  = Number(cumTotals.E)  || 0;         // kJ
+  const ideals = getIdealPerLegs();
+  const sorted = sortResultsByUnifiedScore(resultList, ideals.idealEnergyPerLeg);
 
-  const T = Array.isArray(window.restGroups) ? window.restGroups.length : 0;
-  const R = T + 1; // レグ数
-
-  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
-  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
-  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
-
-  // --- MSEベースでソート（取れないときだけ元のscore/rawScoreにフォールバック） ---
-  resultList.sort((a, b)=>{
-    const mseA = (a.stats
-      ? routeMseScoreFromStats(a.stats, idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg)
-      : NaN);
-    const mseB = (b.stats
-      ? routeMseScoreFromStats(b.stats, idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg)
-      : NaN);
-
-    const sA = Number.isFinite(mseA)
-      ? mseA
-      : (a.score ?? a.rawScore ?? Infinity);   // 直線距離など
-    const sB = Number.isFinite(mseB)
-      ? mseB
-      : (b.score ?? b.rawScore ?? Infinity);
-
-    return sA - sB;
-  });
-
-  // --- CSVへ格納 ---
-  resultList.forEach((r, idx)=>{
+  sorted.forEach((r, idx)=>{
     const rank = idx + 1;
 
-    // σ はこれまで通り「参考情報」として残す
-    const sigmaDist   = stdDev(r.stats?.dist || []);
-    const sigmaTime   = stdDev(r.stats?.time || []);
-    const sigmaEnergy = stdDev(r.stats?.energy || []);
+    const sigmaDist   = stdDev(r.stats && r.stats.dist ? r.stats.dist : []);
+    const sigmaTime   = stdDev(r.stats && r.stats.time ? r.stats.time : []);
+    const sigmaEnergy = stdDev(r.stats && r.stats.energy ? r.stats.energy : []);
 
-    // MSE スコアを計算（無理なら NaN）
-    let mseScore = NaN;
-    if (r.stats) {
-      mseScore = routeMseScoreFromStats(
-        r.stats,
-        idealDistPerLeg,
-        idealTimePerLeg,
-        idealEnergyPerLeg
-      );
-    }
-
-    // MSE が取れるアルゴリズム（総当たり / Viterbi / ビーム）は MSE を採用
-    // 線形距離など stats が足りないものは、既存の score/rawScore をそのまま使う
-    const scoreForCsv =
-      Number.isFinite(mseScore)
-        ? mseScore
-        : (r.score ?? r.rawScore ?? 0);
+    const scoreForCsv = unifiedScoreForCompare(r, ideals.idealEnergyPerLeg);
 
     let poiList = (r.picks || r.picksByTrigger || []).filter(Boolean);
     if (Array.isArray(poiList[0])) poiList = poiList.flat().filter(Boolean);
 
     const poiNames = poiList.map(p => p.name || 'POI').join(' -> ');
-
     const poiLatLngs = poiList
-      .map(p => `${(p.lat??p.latitude)?.toFixed(6)},${(p.lon??p.lng)?.toFixed(6)}`)
+      .map(p => `${(p.lat ?? p.latitude)?.toFixed(6)},${(p.lon ?? p.lng ?? p.longitude)?.toFixed(6)}`)
       .filter(Boolean)
       .join(' | ');
 
@@ -3116,8 +3384,9 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
       algo: algoCode,
       label,
       rank,
-      score: scoreForCsv,       // ★ ここが「MSEベースのscore」に統一される
-      rawScore: r.rawScore,     // もともと持っているものはそのまま残す（総当たりはMSE）
+      bfRank: (r.bfRank ?? ''),
+      score: scoreForCsv,
+      rawScore: r.rawScore,
       sigmaDist,
       sigmaTime,
       sigmaEnergy,
@@ -3130,24 +3399,24 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
   });
 }
   
-  function showAlgoListInPanel(panel, list, algoCode){
+function showAlgoListInPanel(panel, list, algoCode){
   if (!panel) return;
   if (!Array.isArray(list) || !list.length){
     panel.textContent += '(候補なし)\n';
     return;
   }
-
+  
   const MAX_SHOW = 3;
-  const top = list.slice(0, MAX_SHOW);
+  const ideals = getIdealPerLegs();
+  const sorted = sortResultsByUnifiedScore(list, ideals.idealEnergyPerLeg);
+  const top = sorted.slice(0, MAX_SHOW);
 
   top.forEach((r, idx)=>{
     const rank = idx + 1;
 
-    // スコア・rawスコア
     const score    = r.score    ?? null;
     const rawScore = r.rawScore ?? null;
 
-    // stats が無くても落ちないようにガード
     const stats   = r.stats || {};
     const distArr = Array.isArray(stats.dist)   ? stats.dist   : [];
     const timeArr = Array.isArray(stats.time)   ? stats.time   : [];
@@ -3157,7 +3426,6 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
     const sigTime = timeArr.length ? stdDev(timeArr) : null;
     const sigEn   = eneArr.length  ? stdDev(eneArr)  : null;
 
-    // POI名
     const picksArr = (r.picks || r.picksByTrigger || []);
     const poiNames = picksArr
       .filter(Boolean)
@@ -3165,18 +3433,19 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
       .join(' -> ');
 
     panel.textContent += `#${rank}  score=${score}\n`;
-    if (rawScore != null) {
-      panel.textContent += `  rawScore=${rawScore}\n`;
+    if (rawScore != null) panel.textContent += `  rawScore=${rawScore}\n`;
+
+    // ★追加：総当たり順位
+    if (r.bfRank != null) {
+      panel.textContent += `  bf_rank=${r.bfRank}\n`;
+    } else {
+      panel.textContent += `  bf_rank=(圏外/不一致)\n`;
     }
-    if (sigDist != null) {
-      panel.textContent += `  σ距離=${sigDist.toFixed(3)}\n`;
-    }
-    if (sigTime != null) {
-      panel.textContent += `  σ時間=${sigTime.toFixed(3)}\n`;
-    }
-    if (sigEn != null) {
-      panel.textContent += `  σエネルギー=${sigEn.toFixed(3)}\n`;
-    }
+
+    if (sigDist != null) panel.textContent += `  σ距離=${sigDist.toFixed(3)}\n`;
+    if (sigTime != null) panel.textContent += `  σ時間=${sigTime.toFixed(3)}\n`;
+    if (sigEn   != null) panel.textContent += `  σエネルギー=${sigEn.toFixed(3)}\n`;
+
     panel.textContent += `  POI: ${poiNames}\n\n`;
   });
 }
@@ -3189,42 +3458,42 @@ function downloadAlgoCompareCsv(){
   }
 
   const header = [
-  'algo',
-  'label',
-  'rank',
-  'score',
-  'rawScore',
-  'sigmaDist_km',
-  'sigmaTime_min',
-  'sigmaEnergy_kJ',
-  'time_ms',
-  'ors_calls',
-  'overpass_calls',
-  'poi_names',
-  'poi_latlngs'
-];
+    'algo',
+    'label',
+    'rank',
+    'bf_rank',          // ★追加
+    'score',
+    'rawScore',
+    'sigmaDist_km',
+    'sigmaTime_min',
+    'sigmaEnergy_kJ',
+    'time_ms',
+    'ors_calls',
+    'overpass_calls',
+    'poi_names',
+    'poi_latlngs'
+  ];
 
-
-const bodyRows = rows.map(r => [
-  r.algo ?? '',
-  `"${csvEscape(r.label ?? '')}"`,
-  r.rank ?? '',
-  r.score ?? '',
-  r.rawScore ?? '',
-  r.sigmaDist ?? '',
-  r.sigmaTime ?? '',
-  r.sigmaEnergy ?? '',
-  r.timeMs ?? '',
-  r.orsCalls ?? '',
-  r.overpassCalls ?? '',
-  `"${csvEscape(r.poiNames ?? '')}"`,
-  `"${csvEscape(r.poiLatLngs ?? '')}"`
-]);
+  const bodyRows = rows.map(r => [
+    r.algo ?? '',
+    `"${csvEscape(r.label ?? '')}"`,
+    r.rank ?? '',
+    r.bfRank ?? '',     // ★追加
+    r.score ?? '',
+    r.rawScore ?? '',
+    r.sigmaDist ?? '',
+    r.sigmaTime ?? '',
+    r.sigmaEnergy ?? '',
+    r.timeMs ?? '',
+    r.orsCalls ?? '',
+    r.overpassCalls ?? '',
+    `"${csvEscape(r.poiNames ?? '')}"`,
+    `"${csvEscape(r.poiLatLngs ?? '')}"`
+  ]);
 
   const blob = buildCsvBlob(header, bodyRows);
   downloadBlob(blob, 'algo_compare_debug.csv');
 }
-
 
 function renderBruteforceAllResults(results){
   const box = $('bruteforceAllList');
@@ -3362,7 +3631,1016 @@ function drawRestBeams() {
   });
 }
 
+// ---- 対策A：Viterbi風（API）で TopK 候補を作る（ビーム） ----
+async function runViterbiTopK_API(start, goal, restGroups, profile, opt = {}) {
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  if (T <= 0) return [];
+
+  // const beamWidth = Math.max(1, Number(opt.beamWidth) || 10); // 各ステップで残す本数
+  // const topK      = Math.max(1, Number(opt.topK) || 50);      // 最終候補数
+  const ap = autoBeamParams(restGroups, opt);
+const beamWidth = ap.beamWidth;
+const topK      = ap.topK;
+
+// デバッグしたいなら（任意）
+console.log('[autoBeamParams]', ap);
+
+
+  // ideal 1 leg（既存と同じ）
+  const cumTotals = window.__cumTotals || {};
+  const totalDkm  = (Number(cumTotals.D) || 0) / 1000;
+  const totalTmin = (Number(cumTotals.T) || 0) / 60;
+  const totalEkJ  = Number(cumTotals.E)  || 0;
+  const R = T + 1;
+  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
+  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
+  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
+
+  // 事前チェック
+  const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
+  if (Klist.some(k => k <= 0)) return [];
+
+  // beam state: {cost, idxes:[...], lastPoi}
+  let beam = [];
+
+  // step0: start -> group0
+  for (let k = 0; k < Klist[0]; k++){
+    const poi = restGroups[0][k];
+    const leg = await calcLegCostWithApi(start, poi, profile);
+    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
+                           idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    beam.push({ cost: mse, idxes: [k], lastPoi: poi });
+  }
+  beam.sort((a,b)=>a.cost-b.cost);
+  beam = beam.slice(0, beamWidth);
+
+  // step t: group(t-1) -> group(t)
+  for (let t = 1; t < T; t++){
+    const next = [];
+    const curGroup = restGroups[t];
+
+    for (const st of beam){
+      for (let j = 0; j < curGroup.length; j++){
+        const toPoi = curGroup[j];
+        const leg = await calcLegCostWithApi(st.lastPoi, toPoi, profile);
+        const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
+                               idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+        next.push({ cost: st.cost + mse, idxes: [...st.idxes, j], lastPoi: toPoi });
+      }
+    }
+    next.sort((a,b)=>a.cost-b.cost);
+    beam = next.slice(0, beamWidth);
+  }
+
+  // last -> goal
+  const finals = [];
+  for (const st of beam){
+    const leg = await calcLegCostWithApi(st.lastPoi, goal, profile);
+    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
+                           idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    finals.push({ cost: st.cost + mse, idxes: st.idxes });
+  }
+  finals.sort((a,b)=>a.cost-b.cost);
+
+  // idxes から picks を復元して返す（ここではまだ “近似cost”）
+  const cand = finals.slice(0, topK).map(x=>{
+    const picksByTrigger = x.idxes.map((j, t)=> restGroups[t][j]);
+    return {
+      approxScore: x.cost,
+      picksByTrigger,
+      picks: picksByTrigger.filter(Boolean)
+    };
+  });
+
+  return cand;
+}
+
+// ======================================================
+// 共通：TopK候補（runViterbiTopK_APIの返り値）を
+// 1) 重複排除（任意）
+// 2) ORSで stats を作り直して energyMSE で再評価
+// 3) 並べ替え
+// 4) 1本返す or 全件返す を切替
+// ======================================================
+async function rerankTopKCandsByExactScore(start, goal, candList, profile, opt = {}){
+  const list = Array.isArray(candList) ? candList : [];
+  if (!list.length) return [];
+
+  const ideals = getIdealPerLegs();
+  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
+
+  const doDedupe = !!opt.dedupe;
+  const returnAll = !!opt.returnAll;
+
+  // 1) 重複排除（任意）
+  let work = list;
+  if (doDedupe){
+    const seen = new Set();
+    const uniq = [];
+    for (const c of list){
+      const key = comboKeyFromPicksByTrigger(c && c.picksByTrigger, 6);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniq.push(c);
+    }
+    work = uniq;
+  }
+  if (!work.length) return [];
+
+  // 2) ORSで正確なstatsを作って energyMSE で再評価
+  const rescored = [];
+  for (const c of work){
+    try{
+      const picks = Array.isArray(c && c.picks) ? c.picks : [];
+      const wps = [start, ...picks, goal].map(p=>({lat:p.lat, lon:p.lon, name:p.name||'POI'}));
+      const out = await routeLegStatsForWaypoints(wps, profile);
+      const feature = out && out.feature ? out.feature : null;
+      const stats = out && out.stats ? out.stats : null;
+
+      const score = (stats ? routeEnergyMseFromStats(stats, idealEnergyPerLeg) : NaN);
+
+      rescored.push({
+        score: score,
+        rawScore: c.approxScore,
+        feature,
+        stats,
+        picks,
+        picksByTrigger: c.picksByTrigger
+      });
+    }catch(e){
+      console.warn('[rerankTopKCandsByExactScore] candidate fail', e);
+    }
+  }
+
+  if (!rescored.length) return [];
+
+  // 3) scoreで並べ替え（NaNは後ろへ）
+  rescored.sort((a,b)=>{
+    const sa = unifiedScoreForCompare(a, idealEnergyPerLeg);
+    const sb = unifiedScoreForCompare(b, idealEnergyPerLeg);
+    return sa - sb;
+  });
+
+  // 4) 返す形を切替
+  return returnAll ? rescored : [rescored[0]];
+}
+
+// ---- 対策A：TopKを総量MSEで再ランキングして “1本” だけ返す ----
+async function runViterbiTopK_Rerank_API(start, goal, restGroups, profile, opt = {}){
+  const topKList = await runViterbiTopK_API(start, goal, restGroups, profile, opt);
+  return await rerankTopKCandsByExactScore(start, goal, topKList, profile, {
+    dedupe: false,
+    returnAll: false
+  });
+}
+  
+function legL1Cost(d, t, e, ideald, idealt, ideale){
+  return Math.abs(d-ideald) + Math.abs(t-idealt) + Math.abs(e-ideale);
+}
+  
+async function runViterbiOnce_API_L1(start, goal, restGroups, profile) {
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  if (T <= 0) return [];
+
+  const cumTotals = window.__cumTotals || {};
+  const totalDkm  = (Number(cumTotals.D) || 0) / 1000;
+  const totalTmin = (Number(cumTotals.T) || 0) / 60;
+  const totalEkJ  = Number(cumTotals.E)  || 0;
+
+  const R = T + 1;
+  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
+  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
+  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
+
+  const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
+  if (Klist.some(k => k <= 0)) return [];
+
+  const dp=[], prev=[];
+  for(let t=0;t<T;t++){
+    dp[t]=new Array(Klist[t]).fill(Infinity);
+    prev[t]=new Array(Klist[t]).fill(-1);
+  }
+
+  // start -> 0
+  for (let k=0;k<Klist[0];k++){
+    const poi = restGroups[0][k];
+    const leg = await calcLegCostWithApi(start, poi, profile);
+    const c = legL1Cost(leg.distKm, leg.timeMin, leg.energyKj,
+                        idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    dp[0][k]=c;
+  }
+
+  // t-1 -> t
+  for (let t=1;t<T;t++){
+    for (let j=0;j<Klist[t];j++){
+      const toPoi = restGroups[t][j];
+      let best=Infinity, bestIdx=-1;
+
+      for (let i=0;i<Klist[t-1];i++){
+        if (!Number.isFinite(dp[t-1][i])) continue;
+        const fromPoi = restGroups[t-1][i];
+        const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
+        const c = legL1Cost(leg.distKm, leg.timeMin, leg.energyKj,
+                            idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+        const cand = dp[t-1][i] + c;
+        if (cand < best){ best=cand; bestIdx=i; }
+      }
+      dp[t][j]=best;
+      prev[t][j]=bestIdx;
+    }
+  }
+
+  // last -> goal
+  const lastT=T-1;
+  let bestFinal=Infinity, bestIdx=-1;
+  for (let k=0;k<Klist[lastT];k++){
+    if (!Number.isFinite(dp[lastT][k])) continue;
+    const poi = restGroups[lastT][k];
+    const leg = await calcLegCostWithApi(poi, goal, profile);
+    const c = legL1Cost(leg.distKm, leg.timeMin, leg.energyKj,
+                        idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    const cand = dp[lastT][k] + c;
+    if (cand < bestFinal){ bestFinal=cand; bestIdx=k; }
+  }
+  if (bestIdx<0) return [];
+
+  // 復元
+  const picks=new Array(T);
+  let cur=bestIdx;
+  for(let t=lastT;t>=0;t--){
+    picks[t]=restGroups[t][cur];
+    cur=prev[t][cur];
+  }
+
+  // 統計（既存と同じ）
+  let feature=null, stats={dist:[],time:[],energy:[]};
+  try{
+    const wps = [start, ...picks, goal].map(p=>({lat:p.lat, lon:p.lon, name:p.name||'POI'}));
+    const out = await routeLegStatsForWaypoints(wps, profile);
+    feature = out.feature;
+    if(out.stats) stats = out.stats;
+  }catch(e){
+    console.warn('[Viterbi_L1] stats build fail', e);
+  }
+
+  return [{
+    score: bestFinal,     // ← L1最適化のスコア
+    rawScore: bestFinal,
+    feature,
+    stats,
+    picks,
+    picksByTrigger: picks
+  }];
+}
+
+// -------------------------------
+// bf_rank 付与用：組合せキー生成
+//  - picksByTrigger を前提に「トリガー順」を固定して比較
+//  - POI同一判定は lat/lon を丸めて文字列化（誤差吸収）
+// -------------------------------
+function comboKeyFromPicksByTrigger(picksByTrigger, decimals = 6){
+  const arr = Array.isArray(picksByTrigger) ? picksByTrigger : [];
+  const f = (x)=> Number(x).toFixed(decimals);
+
+  return arr.map(p=>{
+    if(!p) return 'null';
+    const lat = (p.lat ?? p.latitude);
+    const lon = (p.lon ?? p.lng ?? p.longitude);
+    if(!Number.isFinite(lat) || !Number.isFinite(lon)) return 'bad';
+    return `${f(lat)},${f(lon)}`;
+  }).join('||');
+}
+
+// bfList（総当たり結果）から rank マップを作る
+function buildBfRankMap(bfList){
+  const map = new Map();
+  (bfList || []).forEach((r, idx)=>{
+    const key = comboKeyFromPicksByTrigger(r.picksByTrigger);
+    // 同一キーが複数出ても「最上位」を採用
+    if(!map.has(key)) map.set(key, idx + 1);
+  });
+  return map;
+}
+
+// 任意アルゴ結果に bfRank を付与（見つからなければ null）
+function attachBfRank(resultList, bfRankMap){
+  if(!bfRankMap || !(bfRankMap instanceof Map)) return resultList;
+  if(!Array.isArray(resultList)) return resultList;
+
+  resultList.forEach(r=>{
+    const pbt = Array.isArray(r.picksByTrigger) ? r.picksByTrigger
+              : Array.isArray(r.picks) ? r.picks
+              : null;
+
+    const key = pbt ? comboKeyFromPicksByTrigger(pbt) : 'bad';
+    r.bfRank = bfRankMap.has(key) ? bfRankMap.get(key) : null;
+  });
+  return resultList;
+}
+
+function autoBeamParams(restGroups, opt = {}){
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+
+  // 各トリガー候補数（配列の配列を想定）
+  const Klist = (Array.isArray(restGroups) ? restGroups : []).map(g => Array.isArray(g) ? g.length : 0);
+  const Kmin = Klist.length ? Math.min(...Klist) : 0;
+  const Kavg = Klist.length ? (Klist.reduce((a,b)=>a+b,0) / Klist.length) : 0;
+
+  // --- ベース：Tが増えるほど少しだけ広げる（爆発させない） ---
+  let beamWidth =
+      (T <= 1) ? 12 :
+      (T === 2) ? 18 :
+      (T === 3) ? 24 :
+      (T === 4) ? 30 :
+      (T === 5) ? 36 :
+                 40; // 6以上は上限
+
+  // 候補が少ないならビームを広げても意味が薄いので抑える
+  // 逆に候補が多いときは少し増やす
+  if (Kavg <= 3) beamWidth = Math.min(beamWidth, 18);
+  if (Kavg >= 10) beamWidth = Math.min(60, Math.floor(beamWidth * 1.25));
+
+  // beamWidth は「各段で残す本数」なので、各トリガー候補より大きくしてもムダになりがち
+  // 目安として Kmin*3 くらいを上限にしておく（Kminが小さいときの無駄防止）
+  if (Kmin > 0) beamWidth = Math.min(beamWidth, Kmin * 3);
+
+  // --- topK：最終候補数。Tが増えるほど少し増やすが上限付き ---
+  let topK =
+      (T <= 1) ? 30 :
+      (T === 2) ? 60 :
+      (T === 3) ? 90 :
+      (T === 4) ? 120 :
+      (T === 5) ? 150 :
+                 180; // 6以上は上限
+
+  // rerank をするなら topK は大きすぎると ORS 追加呼び出しが増えがち → 上限
+  topK = Math.min(topK, 200);
+
+  // --- ユーザー指定があれば優先（明示指定は最強） ---
+  if (opt.beamWidth != null) beamWidth = Math.max(1, Number(opt.beamWidth) || 1);
+  if (opt.topK != null)      topK      = Math.max(1, Number(opt.topK) || 1);
+
+  return { beamWidth, topK, T, Kmin, Kavg };
+}
+
+// ---- 対策B：TopKを重複排除してから総量MSEで再ランキング（API） ----
+async function runViterbiTopK_Rerank_API_Dedupe(start, goal, restGroups, profile, opt = {}){
+  const topKList = await runViterbiTopK_API(start, goal, restGroups, profile, opt);
+  return await rerankTopKCandsByExactScore(start, goal, topKList, profile, {
+    dedupe: true,
+    returnAll: false
+  });
+}
+
+// ---- 対策A(全件)：TopKを総量MSEで再ランキング（全件返す・重複排除なし） ----
+async function runViterbiTopK_Rerank_All_API(start, goal, restGroups, profile, opt = {}){
+  const topKList = await runViterbiTopK_API(start, goal, restGroups, profile, opt);
+  return await rerankTopKCandsByExactScore(start, goal, topKList, profile, {
+    dedupe: false,
+    returnAll: true
+  });
+}
+
+function routeEnergyMseFromStats(stats, idealEnergyPerLeg){
+  const eArr = stats && Array.isArray(stats.energy) ? stats.energy : [];
+  const n = eArr.length;
+  if (!n) return NaN;
+
+  let sum = 0;
+  for (let i = 0; i < n; i++){
+    const ei = Number(eArr[i]);
+    const de = (Number.isFinite(ei) ? ei : 0) - idealEnergyPerLeg;
+    sum += de * de;
+  }
+  return sum / n;
+}
+
+function defaultLinearSorter(a, b){
+  const score = p =>
+    (Number(p?.distFromTriggerM) || 0) +
+    (Number(p?._proj?.perpM) || 0);
+  return score(a) - score(b);
+}
+
+function sumNums(arr){
+  return (arr || []).reduce((a,b)=>a + (Number(b)||0), 0);
+}
+
+function finalScoreFromStats(stats, ideals){
+  // 今の方針：レグごとの energy 均等性
+  return routeEnergyMseFromStats(stats, ideals.idealEnergyPerLeg);
+}
+
+// ======================================================
+// 共通：理想レグ（ideal per leg）を計算
+// ======================================================
+function getIdealPerLegs(){
+  const cumTotals = window.__cumTotals || {};
+  const totalDkm  = (Number(cumTotals.D) || 0) / 1000;
+  const totalTmin = (Number(cumTotals.T) || 0) / 60;
+  const totalEkJ  = Number(cumTotals.E)  || 0;
+
+  const T = Array.isArray(window.restGroups) ? window.restGroups.length : 0;
+  const R = T + 1;
+
+  return {
+    totalDkm, totalTmin, totalEkJ,
+    T, R,
+    idealDistPerLeg:   R > 0 ? totalDkm  / R : 0,
+    idealTimePerLeg:   R > 0 ? totalTmin / R : 0,
+    idealEnergyPerLeg: R > 0 ? totalEkJ  / R : 0,
+  };
+}
+
+// ======================================================
+// 共通：比較用のスコア（並び順・CSV・表示を一致させる）
+// stats があれば energyMSE を最優先（総当たりと同じ土俵）
+// ======================================================
+function unifiedScoreForCompare(r, idealEnergyPerLeg){
+  const e = (r && r.stats) ? routeEnergyMseFromStats(r.stats, idealEnergyPerLeg) : NaN;
+  if (Number.isFinite(e)) return e;
+
+  const s = Number(r && r.score);
+  if (Number.isFinite(s)) return s;
+
+  const rs = Number(r && r.rawScore);
+  if (Number.isFinite(rs)) return rs;
+
+  return Infinity;
+}
+
+// 共通：破壊しないソート（元配列を壊さない）
+function sortResultsByUnifiedScore(list, idealEnergyPerLeg){
+  const arr = Array.isArray(list) ? list : [];
+  return arr.slice().sort((a,b)=>{
+    return unifiedScoreForCompare(a, idealEnergyPerLeg) - unifiedScoreForCompare(b, idealEnergyPerLeg);
+  });
+}
+
+async function runViterbiTopK_Rerank_All_API_Dedupe(start, goal, restGroups, profile, opt = {}){
+  const topKList = await runViterbiTopK_API(start, goal, restGroups, profile, opt);
+  return await rerankTopKCandsByExactScore(start, goal, topKList, profile, {
+    dedupe: true,
+    returnAll: true
+  });
+}
+
+function getAbViterbiOpt(){
+  const auto = !!document.getElementById('abAutoParams')?.checked;
+
+  const bw = Number(document.getElementById('abBeamWidth')?.value);
+  const tk = Number(document.getElementById('abTopK')?.value);
+
+  const opt = {};
+  if (!auto){
+    if (Number.isFinite(bw) && bw > 0) opt.beamWidth = Math.floor(bw);
+    if (Number.isFinite(tk) && tk > 0) opt.topK      = Math.floor(tk);
+  }
+  return opt; // auto=true のときは {} を返す（autoBeamParamsが効く）
+}
+
+// lat/lon正規化（揺れ吸収）
+function normLL(p){
+  if(!p) return null;
+  const lat = Number(p.lat ?? p.latitude ?? p.y);
+  const lon = Number(p.lon ?? p.lng ?? p.longitude ?? p.x);
+  if(!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon };
+}
+
+function distMeters(a, b){
+  const A = normLL(a), B = normLL(b);
+  if(!A || !B) return Infinity;
+
+  if (window.L && L.latLng){
+    return L.latLng(A.lat, A.lon).distanceTo(L.latLng(B.lat, B.lon));
+  }
+  // 簡易フォールバック（雑でOK）
+  const dx = (A.lat - B.lat) * 111320;
+  const dy = (A.lon - B.lon) * 111320;
+  return Math.hypot(dx, dy);
+}
+
+// start/goalに近い端トリガーをwaypointsに差し込むか判断
+function maybeEndTriggersAsWaypoints(start, goal, restGroups, opt){
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  if (!T) return { addStartTrig:false, addGoalTrig:false, startTrig:null, goalTrig:null };
+
+  const thr = Number(opt?.adjacentMeters) || 80;
+
+  const startTrig = restGroups[0]?.rest || null;
+  const goalTrig  = restGroups[T-1]?.rest || null;
+
+  const addStartTrig = !!(opt?.includeEndTriggers && startTrig && distMeters(start, startTrig) <= thr);
+  const addGoalTrig  = !!(opt?.includeEndTriggers && goalTrig  && distMeters(goal,  goalTrig)  <= thr);
+
+  return { addStartTrig, addGoalTrig, startTrig, goalTrig };
+}
+
+// 表示・stats計算用のwaypointsを作る（必要なら端トリガーを差し込む）
+function buildWaypointsForRoute(start, goal, picks, restGroups, opt){
+  const ends = maybeEndTriggersAsWaypoints(start, goal, restGroups, opt);
+
+  const wps = [];
+  wps.push(start);
+
+  if (ends.addStartTrig) wps.push(ends.startTrig);
+
+  (picks || []).forEach(p=>{ if (p) wps.push(p); });
+
+  if (ends.addGoalTrig) wps.push(ends.goalTrig);
+
+  wps.push(goal);
+
+  // ORS入力用に lat/lon を確実化
+  return wps.map(p => {
+    const ll = normLL(p) || {lat:NaN, lon:NaN};
+    return {
+      lat: ll.lat,
+      lon: ll.lon,
+      name: p?.name || 'POI'
+    };
+  });
+}
+
+async function runViterbiOnce_API_C(start, goal, restGroups, profile, opt = {}) {
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  if (!Number.isInteger(T) || T <= 0) return [];
+
+  const ideals = getIdealPerLegs();
+  const idealDistPerLeg   = ideals.idealDistPerLeg;
+  const idealTimePerLeg   = ideals.idealTimePerLeg;
+  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
+
+  const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
+  if (Klist.some(k => !Number.isInteger(k) || k <= 0)) return [];
+
+  const dp   = [];
+  const prev = [];
+  for (let t = 0; t < T; t++) {
+    dp[t]   = new Array(Klist[t]).fill(Infinity);
+    prev[t] = new Array(Klist[t]).fill(-1);
+  }
+
+  // ★対策C：端（start→1st / last→goal）をDPスコアから除外
+  // dp[0][k] は全部0スタート
+  for (let k = 0; k < Klist[0]; k++) dp[0][k] = 0;
+
+  // ★トリガー間だけ評価（t-1 → t）
+  for (let t = 1; t < T; t++) {
+    const curGroup  = restGroups[t];
+    const prevGroup = restGroups[t - 1];
+
+    for (let j = 0; j < Klist[t]; j++) {
+      const toPoi = curGroup[j];
+
+      let bestCost = Infinity;
+      let bestIdx  = -1;
+
+      for (let i = 0; i < Klist[t - 1]; i++) {
+        const prevCost = dp[t - 1][i];
+        if (!Number.isFinite(prevCost)) continue;
+
+        const fromPoi = prevGroup[i];
+        const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
+
+        const mse = legMseCost(
+          leg.distKm,
+          leg.timeMin,
+          leg.energyKj,
+          idealDistPerLeg,
+          idealTimePerLeg,
+          idealEnergyPerLeg
+        );
+
+        const cand = prevCost + mse;
+        if (cand < bestCost) {
+          bestCost = cand;
+          bestIdx  = i;
+        }
+      }
+
+      dp[t][j]   = bestCost;
+      prev[t][j] = bestIdx;
+    }
+  }
+
+  // ★最後→goalも足さない：dp[last] の最小を採用
+  const lastT = T - 1;
+  let bestFinalCost = Infinity;
+  let bestFinalIdx  = -1;
+  for (let k = 0; k < Klist[lastT]; k++){
+    const v = dp[lastT][k];
+    if (Number.isFinite(v) && v < bestFinalCost){
+      bestFinalCost = v;
+      bestFinalIdx = k;
+    }
+  }
+  if (bestFinalIdx < 0 || !Number.isFinite(bestFinalCost)) return [];
+
+  // 復元
+  const picks = new Array(T);
+  let curIdx  = bestFinalIdx;
+  for (let t = lastT; t >= 0; t--) {
+    picks[t] = restGroups[t][curIdx];
+    curIdx   = prev[t][curIdx];
+  }
+
+  // ★表示・CSV用：完全経路(start..goal)で1回だけstatsを作る
+  let feature = null;
+  let stats   = { dist:[], time:[], energy:[] };
+  let finalScore = bestFinalCost; // フォールバック
+
+  try {
+    // 端トリガーを条件で差し込む（ここが「先ほどのC」）
+    const wps = buildWaypointsForRoute(start, goal, picks, window.restGroups, opt);
+
+    const out = await routeLegStatsForWaypoints(wps, profile);
+    feature = out?.feature || null;
+    if (out?.stats) stats = out.stats;
+
+    const exact = finalScoreFromStats(stats, { idealEnergyPerLeg });
+    if (Number.isFinite(exact)) finalScore = exact;
+  } catch (e) {
+    console.warn('[Viterbi_C] stats build fail', e);
+  }
+
+  return [{
+    score: finalScore,       // 表示・比較はこっち（総当たりと同じ土俵）
+    rawScore: bestFinalCost, // DP近似（端除外）
+    feature,
+    stats,
+    picks,
+    picksByTrigger: picks
+  }];
+}
+
+// ======================================================
+// NEW 対策C（置き換え案）:
+//  - DPではなく Beam（近似）
+//  - 各段で「start + これまでのpicks + 次候補 (+ goal)」を1回のORSで評価
+//  - beamWidth 本だけ残す
+//  - キャッシュで同じwaypoints列の再計算を避ける
+// ======================================================
+function wpsKey(points, decimals = 6){
+  const f = (x)=> Number(x).toFixed(decimals);
+  return (points || []).map(p=>{
+    if(!p) return 'null';
+    const lat = Number(p.lat ?? p.latitude);
+    const lon = Number(p.lon ?? p.lng ?? p.longitude);
+    if(!Number.isFinite(lat) || !Number.isFinite(lon)) return 'bad';
+    return `${f(lat)},${f(lon)}`;
+  }).join('||');
+}
+
+async function orsRouteCached(wps, profile, cache){
+  const key = wpsKey(wps, 6);
+  if (cache && cache.has(key)) return cache.get(key);
+
+  const out = await routeLegStatsForWaypoints(
+    wps.map(p=>({ lat:p.lat, lon:p.lon, name:p.name || 'POI' })),
+    profile
+  );
+
+  const packed = {
+    key,
+    feature: out?.feature || null,
+    stats: out?.stats || null
+  };
+
+  if (cache) cache.set(key, packed);
+  return packed;
+}
+
+// ★ 対策C（Beam + 経由地増やすORS）
+async function runViterbiOnce_API_C_BeamFull(start, goal, groups, profile, opt = {}){
+  const T = Array.isArray(groups) ? groups.length : 0;
+  if (!T) return [];
+
+  const beamWidth = Math.max(1, Number(opt.beamWidth) || 12);
+
+  // スコアは「最終経路statsから energyMSE」を優先（既存方針に合わせる）
+  const ideals = getIdealPerLegs();
+
+  // ORS結果キャッシュ（同じwaypoints列は二度呼ばない）
+  const cache = new Map();
+
+  // beam state:
+  // { score, picks, picksByTrigger, feature, stats }
+  let beam = [];
+
+  // --- t=0（最初のトリガー候補を展開） ---
+  for (let j = 0; j < groups[0].length; j++){
+    const p0 = groups[0][j];
+    const wps0 = [start, p0]; // まだgoalは入れない
+    const out0 = await orsRouteCached(wps0, profile, cache);
+
+    // ※中間段はstatsが「最後まで」じゃないので、暫定スコアとして energyMSE を使う
+    //   ここは「距離/時間/エネルギーの部分MSE」でもOKだが、まずは簡単に統一スコアで。
+    const s0 = (out0.stats ? finalScoreFromStats(out0.stats, ideals) : Infinity);
+
+    beam.push({
+      score: Number.isFinite(s0) ? s0 : Infinity,
+      picks: [p0],
+      picksByTrigger: [p0],
+      feature: out0.feature,
+      stats: out0.stats
+    });
+  }
+
+  beam.sort((a,b)=>a.score-b.score);
+  beam = beam.slice(0, beamWidth);
+
+  // --- t=1..T-1 ---
+  for (let t = 1; t < T; t++){
+    const next = [];
+
+    for (const st of beam){
+      for (let j = 0; j < groups[t].length; j++){
+        const pt = groups[t][j];
+        const picks = [...st.picks, pt];
+
+        // 最後のトリガーなら goal まで含めて “完成形” を評価
+        const wps = (t === T-1)
+          ? [start, ...picks, goal]
+          : [start, ...picks];
+
+        try{
+          const out = await orsRouteCached(wps, profile, cache);
+          const s = (out.stats ? finalScoreFromStats(out.stats, ideals) : Infinity);
+
+          next.push({
+            score: Number.isFinite(s) ? s : Infinity,
+            picks,
+            picksByTrigger: picks, // トリガー順の列
+            feature: out.feature,
+            stats: out.stats
+          });
+        }catch(e){
+          // 失敗は捨てる
+          console.warn('[C_BeamFull] expand fail', e);
+        }
+      }
+    }
+
+    if (!next.length) return [];
+
+    next.sort((a,b)=>a.score-b.score);
+    beam = next.slice(0, beamWidth);
+  }
+
+  // beam[0] が最良（完成形）
+  return beam.length ? [beam[0]] : [];
+}
+
+
+function distMeters(a, b){
+  if (!a || !b) return Infinity;
+  if (window.L && L.latLng){
+    return L.latLng(a.lat, a.lon).distanceTo(L.latLng(b.lat, b.lon));
+  }
+  // Leaflet無い前提のフォールバック（雑でOKなら）
+  const dx = (a.lat - b.lat) * 111320;
+  const dy = (a.lon - b.lon) * 111320;
+  return Math.hypot(dx, dy);
+}
+
+function maybeEndTriggersAsWaypoints(start, goal, restGroups, opt){
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  if (!T) return { addStartTrig:false, addGoalTrig:false, startTrig:null, goalTrig:null };
+
+  const thr = Number(opt?.adjacentMeters) || 80;
+
+  const startTrig = restGroups[0]?.rest || null;
+  const goalTrig  = restGroups[T-1]?.rest || null;
+
+  const addStartTrig = !!(opt?.includeEndTriggers && startTrig && distMeters(start, startTrig) <= thr);
+  const addGoalTrig  = !!(opt?.includeEndTriggers && goalTrig  && distMeters(goal,  goalTrig)  <= thr);
+
+  return { addStartTrig, addGoalTrig, startTrig, goalTrig };
+}
+
+// 表示・stats計算用のwaypointsを作る（必要なら端トリガーを差し込む）
+function buildWaypointsForRoute(start, goal, picks, restGroups, opt){
+  const ends = maybeEndTriggersAsWaypoints(start, goal, restGroups, opt);
+
+  const wps = [];
+  wps.push(start);
+
+  if (ends.addStartTrig) wps.push(ends.startTrig);
+
+  (picks || []).forEach(p=>{ if (p) wps.push(p); });
+
+  if (ends.addGoalTrig) wps.push(ends.goalTrig);
+
+  wps.push(goal);
+
+  return wps.map(p => ({
+    lat: p.lat,
+    lon: p.lon,
+    name: p.name || 'POI'
+  }));
+}
+
+function buildVitGroupsWithFixedRest(restGroups, capPerTrigger, variableCount, sorter){
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  const out = [];
+
+  for (let i = 0; i < T; i++){
+    const g = restGroups[i];
+
+    if (i < variableCount){
+      // 場合分けする
+      let pois = Array.isArray(g?.pois) ? g.pois.slice() : [];
+      if (typeof sorter === 'function') pois.sort(sorter);
+      pois = pois.slice(0, capPerTrigger);
+
+      out.push(pois);
+    } else {
+      // 固定する: トリガー地点を候補1個として入れる
+      const r = g?.rest;
+      out.push(r ? [r] : []);
+    }
+  }
+  return out;
+}
+
+async function runViterbi_D_Progressive(start, goal, restGroups, profile, opt = {}){
+  const capPerTrigger = Math.max(1, Number(opt.capPerTrigger) || 5);
+  const sorter = opt.sorter || null;
+
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  const allResults = [];
+
+  for (let variableCount = 1; variableCount <= T; variableCount++){
+    const vitGroups = buildVitGroupsWithFixedRest(
+      restGroups,
+      capPerTrigger,
+      variableCount,
+      sorter
+    );
+
+    const list = await runViterbiOnce_API(start, goal, vitGroups, profile);
+    const best = (Array.isArray(list) && list.length) ? list[0] : null;
+
+    allResults.push({
+      variableCount,
+      best
+    });
+  }
+
+  return allResults;
+}
+
+// 名前が無いPOIに POI{triggerIndex}.{id} を付ける
+function ensurePoiName(poi, triggerIndex, idInTrigger){
+  if (!poi) return poi;
+
+  const name = (poi.name ?? poi.label ?? poi.title ?? '').toString().trim();
+  if (name) return poi; // 既に名前があるなら触らない
+
+  // 表示用として name を入れる（必要なら _autoName にしてもOK）
+  poi.name = `POI${triggerIndex}.${idInTrigger}`;
+  return poi;
+}
+
+// ======================================================
+// 2点区間ORSのキャッシュ（同じfrom/to/profileなら再利用）
+// ======================================================
+const __legCache = new Map();
+
+function legKey(from, to, profile, decimals=6){
+  const f = x => Number(x).toFixed(decimals);
+  const aLat = from?.lat ?? from?.latitude ?? from?.y;
+  const aLon = from?.lon ?? from?.lng ?? from?.longitude ?? from?.x;
+  const bLat = to?.lat   ?? to?.latitude   ?? to?.y;
+  const bLon = to?.lon   ?? to?.lng ?? to?.longitude ?? to?.x;
+  return `${profile}::${f(aLat)},${f(aLon)}=>${f(bLat)},${f(bLon)}`;
+}
+
+async function calcLegCostWithApiCached(from, to, profile){
+  const key = legKey(from, to, profile);
+  if (__legCache.has(key)) return __legCache.get(key);
+
+  const leg = await calcLegCostWithApi(from, to, profile);
+  __legCache.set(key, leg);
+  return leg;
+}
+
+// ======================================================
+// 対策E：Viterbi（2点DP）+ 2点区間キャッシュ
+//   - 最適性は維持
+//   - “同じ区間の重複呼び出し”が減るとAPI回数が減る
+// ======================================================
+async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
+  // ここは runViterbiOnce_API をコピって
+  // calcLegCostWithApi(...) を calcLegCostWithApiCached(...) に置換するだけでOK
+
+  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  if (T <= 0) return [];
+
+  const ideals = getIdealPerLegs();
+  const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
+  if (Klist.some(k => k <= 0)) return [];
+
+  const dp=[], prev=[];
+  for(let t=0;t<T;t++){
+    dp[t]=new Array(Klist[t]).fill(Infinity);
+    prev[t]=new Array(Klist[t]).fill(-1);
+  }
+
+  // start -> 0
+  for (let k=0;k<Klist[0];k++){
+    const poi = restGroups[0][k];
+    const leg = await calcLegCostWithApiCached(start, poi, profile);
+    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
+                           ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
+    dp[0][k]=mse;
+  }
+
+  // t-1 -> t
+  for (let t=1;t<T;t++){
+    for (let j=0;j<Klist[t];j++){
+      const toPoi = restGroups[t][j];
+      let best=Infinity, bestIdx=-1;
+
+      for (let i=0;i<Klist[t-1];i++){
+        if (!Number.isFinite(dp[t-1][i])) continue;
+        const fromPoi = restGroups[t-1][i];
+        const leg = await calcLegCostWithApiCached(fromPoi, toPoi, profile);
+        const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
+                               ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
+        const cand = dp[t-1][i] + mse;
+        if (cand < best){ best=cand; bestIdx=i; }
+      }
+      dp[t][j]=best;
+      prev[t][j]=bestIdx;
+    }
+  }
+
+  // last -> goal
+  const lastT=T-1;
+  let bestFinal=Infinity, bestIdx=-1;
+  for (let k=0;k<Klist[lastT];k++){
+    if (!Number.isFinite(dp[lastT][k])) continue;
+    const poi = restGroups[lastT][k];
+    const leg = await calcLegCostWithApiCached(poi, goal, profile);
+    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
+                           ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
+    const cand = dp[lastT][k] + mse;
+    if (cand < bestFinal){ bestFinal=cand; bestIdx=k; }
+  }
+  if (bestIdx<0) return [];
+
+  // 復元
+  const picks=new Array(T);
+  let cur=bestIdx;
+  for(let t=lastT;t>=0;t--){
+    picks[t]=restGroups[t][cur];
+    cur=prev[t][cur];
+  }
+
+  // 表示用 stats を1回作る
+  let feature=null, stats={dist:[],time:[],energy:[]};
+  try{
+    const wps = [start, ...picks, goal].map(p=>({lat:p.lat, lon:p.lon, name:p.name||'POI'}));
+    const out = await routeLegStatsForWaypoints(wps, profile);
+    feature = out?.feature || null;
+    if(out?.stats) stats = out.stats;
+  }catch(e){}
+
+  return [{
+    score: finalScoreFromStats(stats, { idealEnergyPerLeg: ideals.idealEnergyPerLeg }),
+    rawScore: bestFinal,
+    feature,
+    stats,
+    picks,
+    picksByTrigger: picks
+  }];
+}
+
+// ======================================================
+// 対策F：TopK候補を作ってから “一気に経由地付きORS”で再評価
+//   - TopK生成は近似（ビーム）
+//   - 最終順位は routeLegStatsForWaypoints の1回呼びで確定
+// ======================================================
+async function runViterbi_F_TopN_ThenFullORS(start, goal, groups, profile, opt = {}){
+  // 1) 近似でTopK候補（ビーム）
+  const topKList = await runViterbiTopK_API(start, goal, groups, profile, opt);
+
+  // 2) 一気に経由地付きORSで再評価（既存）
+  // returnAll=true にすると “再評価済み一覧” が取れる
+  return await rerankTopKCandsByExactScore(start, goal, topKList, profile, {
+    dedupe: true,
+    returnAll: true
+  });
+}
+
+function isAlgoEnabled(id){
+  const el = document.getElementById(id);
+  return !!(el && el.checked);
+}
+
 </script>
 </body>
 </html>
-
