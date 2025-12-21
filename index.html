@@ -180,13 +180,6 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   </details>
 </div>
 
-<!-- 既存：ログ表示 -->
-<pre id="algoComparePanel"></pre>
-
-<!-- ★追加：検算CSVダウンロードボタン置き場 -->
-<div id="algoCompareVerifyUI" style="padding:8px;background:#fff;border-top:1px solid #ddd"></div>
-<div id="verifyPanel" style="margin-top:12px; padding:8px; border:1px solid #ccc;"></div>
-
 <label><input type="checkbox" id="dbg_beam" checked> ビーム</label>
 <label><input type="checkbox" id="dbg_bf" checked> 総当たり</label>
 <label><input type="checkbox" id="dbg_vit" checked> Viterbi</label>
@@ -194,6 +187,8 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 <label><input type="checkbox" id="dbg_B" checked> 対策B</label>
 <label><input type="checkbox" id="dbg_C" checked> 対策C</label>
 <label><input type="checkbox" id="dbg_D" checked> 対策D</label>
+<label><input type="checkbox" id="dbg_E" checked> 対策E</label>
+<label><input type="checkbox" id="dbg_F" checked> 対策F</label>
 
 <label style="display:inline-flex;align-items:center;gap:6px">
   A/B beamWidth
@@ -220,8 +215,8 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 
 <script>
 /* ====== 設定 ====== */
-// const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
-const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
+const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
+// const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
 const ORS_ROOT = 'https://api.openrouteservice.org';
 
 /* ====== ヘルパ ====== */
@@ -275,6 +270,7 @@ function makeCandGroupsFromRestGroups(restGroups, cap=5, sorter=null){
     return sliced;
   });
 }
+
 
 // HTML要素取得
 function $(id){ return document.getElementById(id); }
@@ -2738,12 +2734,8 @@ async function viterbiRouteCost(p1, p2, profile){
 async function runBruteforceOnce(start, goal, restGroups, profile){
   // 休憩トリガーごとの POI を取得（poiLimit まで）
   const perGroupLimit = Math.max(1, Number($('poiLimit').value) || 5);
- const poiGroups = restGroups.map((g, ti) => {
-  const arr = Array.isArray(g?.pois) ? g.pois : [];
-  // ★名前補修
-  arr.forEach((p, idx)=> ensurePoiName(p, ti, idx));
-  return arr;
-});
+  const poiGroups = restGroups.map(g => Array.isArray(g.pois) ? g.pois : []);
+
   // POI を perGroupLimit で頭から切り出して、総当たり用のグループに変換
   const combos = enumerateCombinations(poiGroups, perGroupLimit);
   if (!combos.length){
@@ -2837,10 +2829,6 @@ async function runAlgoCompareDebug(){
   const tAll0 = performance.now();
   window.__algoCompareRows = [];
 
-  // ★検算候補をリセットしてUIも空で描画
-  window.__verifyCandidates = {};
-  renderVerifyButtons(); // 空状態を描画（verifyPanel がある前提）
-
   try {
     if (!routeData || !routeData.fastest) {
       panel.textContent = '先に「休憩場所検索」でルート＋POIを生成してください。';
@@ -2854,8 +2842,8 @@ async function runAlgoCompareDebug(){
     ensureProjections();
     const cumTotals = window.__cumTotals;
 
-    const start   = pts.find(p => p.type === 'start') || pts[0];
-    const goal    = pts.find(p => p.type === 'goal')  || pts[pts.length - 1];
+    const start = pts.find(p => p.type === 'start') || pts[0];
+    const goal  = pts.find(p => p.type === 'goal')  || pts[pts.length - 1];
     const profile = 'cycling-road';
 
     panel.textContent += '====== アルゴリズム比較デバッグ ======\n\n';
@@ -2875,14 +2863,9 @@ async function runAlgoCompareDebug(){
 
         const t0 = performance.now();
         bfList = await runBruteforceOnce(start, goal, restGroups, profile);
-
-        // ★追加：総当たり1位を保存（検算用）
-        window.__bfBest = bfList?.[0] || null;
-
-        bfRankMap = buildBfRankMap(bfList);
         const t1 = performance.now();
 
-        const ms  = t1 - t0;
+        const ms = t1 - t0;
         const ors = API_USED.orsTotal - orsBefore;
         const ov  = API_USED.overpassTotal - ovpBefore;
 
@@ -2891,13 +2874,11 @@ async function runAlgoCompareDebug(){
         panel.textContent += `Overpass呼び出し: ${ov} 回\n`;
         panel.textContent += `組合せ数: ${bfList.length} 件\n\n`;
 
+        bfRankMap = buildBfRankMap(bfList);
         attachBfRank(bfList, bfRankMap);
 
         showAlgoListInPanel(panel, bfList, 'bruteforce');
         pushAlgoResultsForCsv('bruteforce','総当たり',bfList,ms,ors,ov);
-
-        // ★検算候補登録（上位3件）
-        registerVerifyCandidates('bruteforce', '総当たり', bfList);
       }
     } else {
       panel.textContent += '\n--- 総当たり：OFF（bf_rank未計算） ---\n';
@@ -2916,10 +2897,11 @@ async function runAlgoCompareDebug(){
         const beamList = runBeamSearchOnce(restGroups, cumTotals);
         const t1 = performance.now();
 
-        const ms  = t1 - t0;
+        const ms = t1 - t0;
         const ors = API_USED.orsTotal - orsBefore;
         const ov  = API_USED.overpassTotal - ovpBefore;
 
+        // bf ONのときだけ付く（OFFなら何もしない）
         attachBfRank(beamList, bfRankMap);
 
         panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
@@ -2928,9 +2910,6 @@ async function runAlgoCompareDebug(){
 
         showAlgoListInPanel(panel, beamList, 'beam3');
         pushAlgoResultsForCsv('beam3','ビームサーチ（幅3）',beamList.slice(0,3),ms,ors,ov);
-
-        // ★検算候補登録
-        registerVerifyCandidates('beam3', 'ビームサーチ（幅3）', beamList);
       }
     }
 
@@ -2952,7 +2931,7 @@ async function runAlgoCompareDebug(){
           const linearRows = buildLinearAlgoRows(start, goal, groups);
           const t1 = performance.now();
 
-          const ms  = t1 - t0;
+          const ms = t1 - t0;
           const ors = API_USED.orsTotal - orsBefore;
           const ov  = API_USED.overpassTotal - ovpBefore;
 
@@ -2967,9 +2946,6 @@ async function runAlgoCompareDebug(){
 
           showAlgoListInPanel(panel, linearRows.slice(0, 3), 'linear');
           pushAlgoResultsForCsv('linear','直線距離（全組合せ）',linearRows,ms,ors,ov);
-
-          // ★検算候補登録
-          registerVerifyCandidates('linear', '直線距離（全組合せ）', linearRows);
         }
       } catch (e) {
         console.error('[linear] error', e);
@@ -3011,9 +2987,6 @@ async function runAlgoCompareDebug(){
 
             showAlgoListInPanel(panel, vitList, 'viterbi');
             pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
-
-            // ★検算候補登録
-            registerVerifyCandidates('viterbi', 'Viterbi（API・DP：MSEのみ）', vitList);
           }
         }
       } catch (e) {
@@ -3041,7 +3014,7 @@ async function runAlgoCompareDebug(){
           const aList = await runViterbiTopK_Rerank_All_API(start, goal, groupsA, profile, aOpt);
           const t1 = performance.now();
 
-          const ms  = t1 - t0;
+          const ms = t1 - t0;
           const ors = API_USED.orsTotal - orsBefore;
           const ov  = API_USED.overpassTotal - ovpBefore;
 
@@ -3060,9 +3033,6 @@ async function runAlgoCompareDebug(){
               '対策A：Viterbi TopK→総量MSE再ランキング',
               aList, ms, ors, ov
             );
-
-            // ★検算候補登録
-            registerVerifyCandidates('viterbi_topk_rerank', '対策A：TopK→総量MSE再ランキング', aList);
           }
         }
       } catch (e) {
@@ -3090,7 +3060,7 @@ async function runAlgoCompareDebug(){
           const bList = await runViterbiTopK_Rerank_All_API_Dedupe(start, goal, groupsB, profile, bOpt);
           const t1 = performance.now();
 
-          const ms  = t1 - t0;
+          const ms = t1 - t0;
           const ors = API_USED.orsTotal - orsBefore;
           const ov  = API_USED.overpassTotal - ovpBefore;
 
@@ -3105,9 +3075,6 @@ async function runAlgoCompareDebug(){
 
             showAlgoListInPanel(panel, bList.slice(0,3), 'viterbi_l1');
             pushAlgoResultsForCsv('viterbi_l1','対策B：Viterbi（L1加法）',bList,ms,ors,ov);
-
-            // ★検算候補登録
-            registerVerifyCandidates('viterbi_l1', '対策B：Viterbi（L1加法）', bList);
           }
         }
       } catch (e) {
@@ -3135,6 +3102,7 @@ async function runAlgoCompareDebug(){
         } else {
           const t0 = performance.now();
 
+          // ここはあなたが使ってるC関数に合わせてOK（今は BeamFull を呼んでる形）
           const cList = await runViterbiOnce_API_C_BeamFull(start, goal, groupsC, profile, {
             beamWidth: 12
           });
@@ -3155,9 +3123,6 @@ async function runAlgoCompareDebug(){
 
             showAlgoListInPanel(panel, cList, 'viterbi_c');
             pushAlgoResultsForCsv('viterbi_c','対策C：端除外Viterbi + 端トリガー条件経由',cList,ms,ors,ov);
-
-            // ★検算候補登録
-            registerVerifyCandidates('viterbi_c', '対策C：端除外 + 端トリガー条件経由', cList);
           }
         }
       } catch (e) {
@@ -3198,9 +3163,6 @@ async function runAlgoCompareDebug(){
 
           showAlgoListInPanel(panel, last, 'viterbi_D_prog');
           pushAlgoResultsForCsv('viterbi_D_prog','対策D：段階的固定解除Viterbi', last, ms, ors, ov);
-
-          // ★検算候補登録（last は1件だけ）
-          registerVerifyCandidates('viterbi_D_prog', '対策D：段階的固定解除Viterbi', last);
         } else {
           panel.textContent += '(候補なし)\n';
         }
@@ -3221,7 +3183,7 @@ async function runAlgoCompareDebug(){
         const ovpBefore = API_USED.overpassTotal;
 
         if (window.__legCache && typeof window.__legCache.clear === 'function'){
-          window.__legCache.clear();
+          window.__legCache.clear(); // 測定を綺麗にしたいなら
         } else if (typeof __legCache !== 'undefined' && __legCache?.clear){
           __legCache.clear();
         }
@@ -3248,9 +3210,6 @@ async function runAlgoCompareDebug(){
 
           showAlgoListInPanel(panel, eList, 'viterbi_E_cache');
           pushAlgoResultsForCsv('viterbi_E_cache','対策E：Viterbi（2点DP + キャッシュ）',eList,ms,ors,ov);
-
-          // ★検算候補登録
-          registerVerifyCandidates('viterbi_E_cache', '対策E：2点DP + キャッシュ', eList);
         }
       } catch (e) {
         console.error('[viterbi_E_cache] error', e);
@@ -3271,7 +3230,7 @@ async function runAlgoCompareDebug(){
         const groupsF = makeCandGroupsFromRestGroups(restGroups, capPerTrigger, defaultLinearSorter);
 
         const t0 = performance.now();
-        const fOpt = getAbViterbiOpt();
+        const fOpt = getAbViterbiOpt(); // A/BのUI流用
         const fList = await runViterbi_F_TopN_ThenFullORS(start, goal, groupsF, profile, fOpt);
         const t1 = performance.now();
 
@@ -3290,9 +3249,6 @@ async function runAlgoCompareDebug(){
 
           showAlgoListInPanel(panel, fList.slice(0,3), 'viterbi_F_fullrerank');
           pushAlgoResultsForCsv('viterbi_F_fullrerank','対策F：TopK→一気にORS再評価',fList,ms,ors,ov);
-
-          // ★検算候補登録
-          registerVerifyCandidates('viterbi_F_fullrerank', '対策F：TopK→一気にORS再評価', fList);
         }
       } catch (e) {
         console.error('[viterbi_F_fullrerank] error', e);
@@ -3309,10 +3265,6 @@ async function runAlgoCompareDebug(){
   } catch (err) {
     console.error('[runAlgoCompareDebug] エラー', err);
     panel.textContent += '\n[runAlgoCompareDebug エラー] ' + (err.message || err);
-
-  } finally {
-    // ★最後に必ずボタン描画（途中でエラーが起きても更新される）
-    renderVerifyButtons();
   }
 }
   
@@ -3456,8 +3408,7 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
       orsCalls,
       overpassCalls,
       poiNames,
-      poiLatLngs,
-      resultRef: r, // ★検算用（メモリ上に保持）
+      poiLatLngs
     });
   });
 }
@@ -4702,248 +4653,6 @@ async function runViterbi_F_TopN_ThenFullORS(start, goal, groups, profile, opt =
 function isAlgoEnabled(id){
   const el = document.getElementById(id);
   return !!(el && el.checked);
-}
-
-function wpLabel(p, fallback){
-  if (!p) return fallback || '(null)';
-  return p.name || fallback || 'POI';
-}
-
-// wps: [{lat,lon,name}] の配列（start→…→goal）
-// 返り値: { rows:[...], totals:{dist_km,time_min,energy_kj} }
-async function buildLegVerifyTable(wps, profile){
-  const rows = [];
-
-  for (let i = 0; i < wps.length - 1; i++){
-    const a = wps[i];
-    const b = wps[i+1];
-
-    const leg = await calcLegCostWithApiCached(a, b, profile);
-
-    rows.push({
-      legIndex: i + 1,
-      from: wpLabel(a, i === 0 ? 'START' : `WP${i}`),
-      to:   wpLabel(b, i + 1 === wps.length - 1 ? 'GOAL' : `WP${i+1}`),
-      dist_km:  Number(leg?.distKm)   || 0,
-      time_min: Number(leg?.timeMin)  || 0,
-      energy_kj:Number(leg?.energyKj) || 0
-    });
-  }
-
-  const sum = (k)=> rows.reduce((acc,r)=> acc + (Number(r[k])||0), 0);
-  return {
-    rows,
-    totals: {
-      dist_km:   sum('dist_km'),
-      time_min:  sum('time_min'),
-      energy_kj: sum('energy_kj')
-    }
-  };
-}
-
-function totalsFromStats(stats){
-  const arr = (x)=> Array.isArray(x) ? x : [];
-  const sum = (a)=> arr(a).reduce((s,v)=> s + (Number(v)||0), 0);
-
-  return {
-    dist_km:   sum(stats?.dist),
-    time_min:  sum(stats?.time),
-    energy_kj: sum(stats?.energy),
-  };
-}
-
-function downloadVerifyCsv(filename, legRows, legTotals, statsTotals){
-  const header = [
-    'legIndex','from','to','dist_km','time_min','energy_kj',
-    'SUM_dist_km','SUM_time_min','SUM_energy_kj',
-    'STATS_dist_km','STATS_time_min','STATS_energy_kj'
-  ];
-
-  const bodyRows = legRows.map((r, idx)=> {
-    const first = (idx === 0);
-    return [
-      r.legIndex,
-      `"${csvEscape(r.from)}"`,
-      `"${csvEscape(r.to)}"`,
-      r.dist_km,
-      r.time_min,
-      r.energy_kj,
-      first ? legTotals.dist_km : '',
-      first ? legTotals.time_min : '',
-      first ? legTotals.energy_kj : '',
-      first ? statsTotals.dist_km : '',
-      first ? statsTotals.time_min : '',
-      first ? statsTotals.energy_kj : ''
-    ];
-  });
-
-  const blob = buildCsvBlob(header, bodyRows);
-  downloadBlob(blob, filename);
-}
-
-async function exportVerifyForResult(algoCode, result){
-  if (!result) throw new Error('exportVerifyForResult: result がありません');
-
-  const { start, goal } = getStartGoalPoints();
-  const profile = document.getElementById('profileSelect')?.value || 'cycling-road';
-
-  // picks の取り出し（あなたの構造に合わせて吸収）
-  let picks = (result.picks || result.picksByTrigger || []).filter(Boolean);
-  if (Array.isArray(picks[0])) picks = picks.flat().filter(Boolean);
-
-  const wps = [start, ...picks, goal].map(p=>({
-    lat: p.lat,
-    lon: p.lon,
-    name: p.name || 'POI'
-  }));
-
-  // 区間ORS（キャッシュ利用）
-  const legOut = await buildLegVerifyTable(wps, profile);
-
-  // 結果が持つ stats（総当たりと同じ総計を確認）
-  const statsTotals = totalsFromStats(result.stats || {});
-
-  downloadVerifyCsv(
-    `verify_${algoCode}.csv`,
-    legOut.rows,
-    legOut.totals,
-    statsTotals
-  );
-}
-
-function exportVerifyTop(algoCode, rank=1){
-  const rows = window.__algoCompareRows || [];
-  const target = rows.find(r => r.algo === algoCode && r.rank === rank);
-  if (!target || !target.resultRef) {
-    alert('該当の結果が見つかりません（先にアルゴ比較デバッグを実行してね）');
-    return;
-  }
-  exportVerifyForResult(`${algoCode}_r${rank}`, target.resultRef);
-}
-
-// ======================================================
-// ★検算CSV UI：各アルゴの上位結果を登録→ボタン生成
-// ======================================================
-window.__verifyCandidates = {}; // {algoCode:{label, results:[...]}} を溜める
-
-function registerVerifyCandidates(algoCode, label, list){
-  if (!Array.isArray(list) || !list.length) return;
-
-  const ideals = getIdealPerLegs();
-  const sorted = sortResultsByUnifiedScore(list, ideals.idealEnergyPerLeg);
-
-  // 上位3件まで登録（必要なら増やしてOK）
-  const top = sorted.slice(0, 3);
-
-  window.__verifyCandidates[algoCode] = {
-    label: label || algoCode,
-    results: top
-  };
-}
-
-// ======================================================
-// ★検算CSV UI：登録済み候補からボタンを生成
-// ======================================================
-function renderVerifyButtons(){
-  const box = document.getElementById('verifyPanel');
-  if (!box) return;
-
-  box.innerHTML = '<h3>検算用CSVダウンロード</h3>';
-
-  const map = window.__verifyCandidates || {};
-  const algoCodes = Object.keys(map);
-
-  if (!algoCodes.length){
-    box.innerHTML += '<div style="color:#666">（検算対象なし）</div>';
-    return;
-  }
-
-  algoCodes.forEach(algoCode => {
-    const entry = map[algoCode];
-    if (!entry || !Array.isArray(entry.results)) return;
-
-    entry.results.forEach((res, idx) => {
-      const btn = document.createElement('button');
-      btn.style.margin = '4px';
-      btn.textContent = `${entry.label} #${idx + 1} 検算CSV`;
-
-      btn.onclick = async () => {
-        try {
-          btn.disabled = true;
-          const old = btn.textContent;
-          btn.textContent = '生成中…';
-
-          // ★既に作ってある検算CSV生成関数を呼ぶ
-          await exportVerifyForResult(
-            `${algoCode}_rank${idx + 1}`,
-            res
-          );
-
-          btn.textContent = old;
-          btn.disabled = false;
-        } catch (e){
-          btn.disabled = false;
-          btn.textContent = `${entry.label} #${idx + 1} 検算CSV`;
-          alert('検算CSV生成に失敗しました: ' + (e.message || e));
-          console.error(e);
-        }
-      };
-
-      box.appendChild(btn);
-    });
-
-    box.appendChild(document.createElement('br'));
-  });
-}
-
-  keys.forEach(algoCode => {
-    const entry = cand[algoCode];
-    const wrap = document.createElement('div');
-    wrap.style.padding = '6px 0';
-    wrap.style.borderTop = '1px dashed #eee';
-
-    const head = document.createElement('div');
-    head.style.fontWeight = '600';
-    head.textContent = `${entry.label}（${algoCode}）`;
-    wrap.appendChild(head);
-
-    const row = document.createElement('div');
-    row.style.display = 'flex';
-    row.style.flexWrap = 'wrap';
-    row.style.gap = '6px';
-    row.style.marginTop = '6px';
-
-    entry.results.forEach((r, idx) => {
-      const rank = idx + 1;
-      const btn = document.createElement('button');
-      btn.textContent = `検算CSV（#${rank}）`;
-      btn.style.padding = '6px 10px';
-      btn.style.border = '1px solid #ccc';
-      btn.style.borderRadius = '8px';
-      btn.style.background = '#f7f7f7';
-      btn.style.cursor = 'pointer';
-
-      btn.onclick = async () => {
-        btn.disabled = true;
-        const old = btn.textContent;
-        btn.textContent = '作成中…';
-        try {
-          await exportVerifyForResult(`${algoCode}_r${rank}`, r);
-        } catch (e) {
-          alert('検算CSVの作成に失敗: ' + (e.message || e));
-          console.error(e);
-        } finally {
-          btn.disabled = false;
-          btn.textContent = old;
-        }
-      };
-
-      row.appendChild(btn);
-    });
-
-    wrap.appendChild(row);
-    box.appendChild(wrap);
-  });
 }
 
 </script>
