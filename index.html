@@ -220,6 +220,25 @@ const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9';
 // const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
 const ORS_ROOT = 'https://api.openrouteservice.org';
 
+// ============================
+// ✅ CFG が無い環境でも動くためのミニ定義
+// （既に CFG があるなら上書きしない）
+// ============================
+window.CFG = window.CFG || {};
+
+CFG.viterbi = CFG.viterbi || {};
+CFG.linear  = CFG.linear  || {};
+CFG.ui      = CFG.ui      || {};
+
+// 対策A/B/C/D/E/F 周りで参照されている可能性が高いものだけ最低限用意
+if (!Number.isFinite(CFG.viterbi.capPerTriggerDefault)) CFG.viterbi.capPerTriggerDefault = 5;
+if (!Number.isFinite(CFG.viterbi.beamZeroApiWidth))     CFG.viterbi.beamZeroApiWidth     = 12;
+
+if (!Number.isFinite(CFG.linear.candPerTrigger))        CFG.linear.candPerTrigger        = 5;
+
+// showTop は linear の表示件数で使ってたので最低限
+if (!Number.isFinite(CFG.ui.showTop))                   CFG.ui.showTop                   = 3;
+
 /* ====== ヘルパ ====== */
 let map, pts=[], markerLayer, routeLayers={}, lastDirTs=0;
 let routeData = { shortest:null, fastest:null, slope:null, arterial:null };
@@ -4092,15 +4111,26 @@ async function runViterbiTopK_Rerank_All_API_Dedupe(start, goal, restGroups, pro
 }
 
 function getAbViterbiOpt(ui){
-  // ui が渡されない呼び方にも一応耐える
   ui = ui || readUI();
 
+  // ✅ auto=trueでも "明示パラメータ" を返す（autoBeamParams側に行かせない狙い）
+  // ※runViterbiTopK_API が opt.beamWidth / opt.topK を優先して使う実装なら効果あり
   const opt = {};
-  if (!ui.ab.auto){
-    if (Number.isFinite(ui.ab.beamWidth) && ui.ab.beamWidth > 0) opt.beamWidth = ui.ab.beamWidth;
-    if (Number.isFinite(ui.ab.topK) && ui.ab.topK > 0) opt.topK = ui.ab.topK;
+
+  const bw = ui.ab.beamWidth;
+  const tk = ui.ab.topK;
+
+  // auto=true のときは UI値が空でも CFGのデフォルトに落とす
+  if (ui.ab.auto) {
+    opt.beamWidth = Number.isFinite(bw) && bw > 0 ? bw : (CFG?.viterbi?.beamWidthDefault ?? 40);
+    opt.topK      = Number.isFinite(tk) && tk > 0 ? tk : (CFG?.viterbi?.topKDefault ?? 150);
+    return opt;
   }
-  return opt; // auto=true のときは {}（autoBeamParams側が効く想定）
+
+  // auto=false の通常挙動
+  if (Number.isFinite(bw) && bw > 0) opt.beamWidth = bw;
+  if (Number.isFinite(tk) && tk > 0) opt.topK = tk;
+  return opt;
 }
 
 // lat/lon正規化（揺れ吸収）
@@ -4655,6 +4685,7 @@ function readUI(){
 </script>
 </body>
 </html>
+
 
 
 
