@@ -241,16 +241,14 @@ function getPoisGroup(g){
 }
 
 // restGroups(形①/②どちらでもOK) → [ [poi...], [poi...], ... ] に統一して返す
-function ensurePoiName(p, a, b){
-  if (!p) return p;
+function ensurePoiName(poi, triggerIndex, idInTrigger){
+  if (!poi) return poi;
 
-  const n = String(p.name ?? '').trim();
+  const name = (poi.name ?? poi.label ?? poi.title ?? '').toString().trim();
+  if (name) return poi;
 
-  // ① nameが空 ② "POI" ③ "poi" みたいな仮名 のときは置き換え
-  if (!n || n.toLowerCase() === 'poi') {
-    p.name = `POI${a}.${b}`;
-  }
-  return p;
+  poi.name = `POI${triggerIndex}_${idInTrigger}`; // ← POI{トリガーID}_{ID}
+  return poi;
 }
 
 function makeCandGroupsFromRestGroups(restGroups, cap=5, sorter=null){
@@ -3284,19 +3282,24 @@ function ensureProjections() {
   };
 
   // 各休憩グループの POI に射影データを付ける
-  for (const g of restGroups) {
-    const arr = g?.pois || [];
-    for (const p of arr) {
-      if (!p) continue;
+for (let ti = 0; ti < restGroups.length; ti++){
+  const g = restGroups[ti];
+  const arr = g?.pois || [];
 
-      // 既に _proj があり cumD が有限値ならスキップ
-      if (p._proj && Number.isFinite(p._proj.cumD)) continue;
+  for (let pi = 0; pi < arr.length; pi++){
+    const p = arr[pi];
+    if (!p) continue;
 
-      // _proj を計算して付与
-      p._proj = projectToRoute(p.lat, p.lon, coords, cum);
-    }
+    // ★ここで「名前が無ければ自動命名」
+    ensurePoiName(p, ti, pi);
+
+    // 既に _proj があり cumD が有限値ならスキップ
+    if (p._proj && Number.isFinite(p._proj.cumD)) continue;
+
+    // _proj を計算して付与
+    p._proj = projectToRoute(p.lat, p.lon, coords, cum);
   }
-
+}
   console.log("[ensureProjections] 射影を再計算しました");
 }
 
@@ -4658,3 +4661,4 @@ function isAlgoEnabled(id){
 </script>
 </body>
 </html>
+
