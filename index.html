@@ -1724,6 +1724,11 @@ function updateRestPoiPanel(){
   if (!ol) return;
   ol.innerHTML = '';
 
+  // ★ここを追加：UIに出す直前に、全POIへ命名を強制
+  restGroups.forEach((g, ti) => {
+    (g?.pois || []).forEach((p, pi) => ensurePoiName(p, ti, pi));
+  });
+
   if (!restGroups.length){
     const li = document.createElement('li');
     li.textContent = '休憩トリガーはありません';
@@ -2197,50 +2202,6 @@ function buildLinearAlgoRows(start, goal, groups, hardCap = 200000) {
   return rows;
 }
 
-// ======================================================
-// 2点間の区間コストを ORS(API) で計算するヘルパー
-//   - from, to : {lat, lon, name?...} 形式のオブジェクト
-//   - profile  : 'cycling-road' など
-//   - 返り値   : { total, distKm, timeMin, energyKj }
-//     ※ total は後方互換用（今後は使わず、MSEで評価）
-// ======================================================
-// async function calcLegCostWithApi(from, to, profile){
-//   if (!from || !to) {
-//     throw new Error('calcLegCostWithApi: from/to が不正です');
-//   }
-
-//   const wps = [
-//     {
-//       lat: from.lat ?? from.latitude  ?? from.y,
-//       lon: from.lon ?? from.longitude ?? from.x
-//     },
-//     {
-//       lat: to.lat   ?? to.latitude    ?? to.y,
-//       lon: to.lon   ?? to.longitude   ?? to.x
-//     }
-//   ];
-
-//   // 既に使っている ORS ヘルパーを流用
-//   const out = await routeLegStatsForWaypoints(wps, profile);
-//   const feature = out?.feature;
-//   const summary = feature?.properties?.summary || {};
-
-//   const distM = Number(summary.distance) || 0;   // m
-//   const timeS = Number(summary.duration) || 0;   // s
-
-//   const distKm  = distM / 1000;
-//   const timeMin = timeS / 60;
-
-//   // ★ 既存のエネルギー計算ロジックを利用（stepごとに energyStepKJ）
-//   const mass = 75;   // 他の箇所と合わせる
-//   const flat = 18;
-//   const energyKj = await totalEnergyKJ(feature, mass, flat); // kJ
-
-//   // total は後方互換用：とりあえず距離ベース
-//   const total = distKm;
-
-//   return { total, distKm, timeMin, energyKj };
-// }
 async function calcLegCostWithApi(from, to, profile){
   if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
 
@@ -4518,13 +4479,17 @@ async function runViterbi_D_Progressive(start, goal, restGroups, profile, opt = 
 function ensurePoiName(poi, triggerIndex, idInTrigger){
   if (!poi) return poi;
 
-  const name = (poi.name ?? poi.label ?? poi.title ?? '').toString().trim();
-  if (name) return poi;
+  const raw = (poi.name ?? poi.label ?? poi.title ?? '').toString().trim();
 
-  const tid = Number.isFinite(poi._triggerId) ? poi._triggerId : triggerIndex;
-  const pid = Number.isFinite(poi._poiIdInTrigger) ? poi._poiIdInTrigger : idInTrigger;
+  // ★「不明扱い」判定を追加：空文字だけでなく 'POI' / 'poi' も置換対象にする
+  const isUnknown =
+    !raw ||
+    /^poi$/i.test(raw) ||                 // "POI" だけ
+    /^poi[_\-\s]*$/i.test(raw);           // "POI_" みたいなのも一応
 
-  poi.name = `POI${tid}_${pid}`; // ← POI{トリガーID}_{0始まりID}
+  if (!isUnknown) return poi;
+
+  poi.name = `POI${triggerIndex}_${idInTrigger}`; // 0始まり
   return poi;
 }
 
@@ -4665,8 +4630,28 @@ function isAlgoEnabled(id){
   return !!(el && el.checked);
 }
 
+function applyAutoNamesToAllPois(){
+  if (!Array.isArray(restGroups)) return;
+
+  for (let ti = 0; ti < restGroups.length; ti++){
+    const arr = restGroups[ti]?.pois || [];
+    for (let pi = 0; pi < arr.length; pi++){
+      const p = arr[pi];
+      if (!p) continue;
+
+      // 安定ID（任意：おすすめ）
+      p._triggerId = ti;
+      p._poiIdInTrigger = pi;
+
+      // 名前が無ければ POI{ti}_{pi}
+      ensurePoiName(p, ti, pi);
+    }
+  }
+}
+
 </script>
 </body>
 </html>
+
 
 
