@@ -261,14 +261,15 @@ function makeCandGroupsFromRestGroups(restGroups, cap=5, sorter=null){
 
     const sliced = out.slice(0, Math.min(cap, out.length));
 
-    // ★ここで確実に名前を付ける
-    const a = i + 1; // トリガー番号（1始まり）
-    sliced.forEach((p, b) => ensurePoiName(p, a, b));
+    // ★ここで確実に名前を付ける（0始まり & 安定ID）
+    sliced.forEach((p, b) => {
+      // すでに ensureProjections で _triggerId/_poiIdInTrigger が付いてるならそれが優先される
+      ensurePoiName(p, i, b);
+    });
 
     return sliced;
   });
 }
-
 
 // HTML要素取得
 function $(id){ return document.getElementById(id); }
@@ -3290,6 +3291,10 @@ for (let ti = 0; ti < restGroups.length; ti++){
     const p = arr[pi];
     if (!p) continue;
 
+    
+    // ★追加：安定IDを埋め込む（毎回同じPOIに同じIDが付く）
+    p._triggerId = ti;
+    p._poiIdInTrigger = pi;
     // ★ここで「名前が無ければ自動命名」
     ensurePoiName(p, ti, pi);
 
@@ -4514,10 +4519,12 @@ function ensurePoiName(poi, triggerIndex, idInTrigger){
   if (!poi) return poi;
 
   const name = (poi.name ?? poi.label ?? poi.title ?? '').toString().trim();
-  if (name) return poi; // 既に名前があるなら触らない
+  if (name) return poi;
 
-  // 表示用として name を入れる（必要なら _autoName にしてもOK）
-  poi.name = `POI${triggerIndex}.${idInTrigger}`;
+  const tid = Number.isFinite(poi._triggerId) ? poi._triggerId : triggerIndex;
+  const pid = Number.isFinite(poi._poiIdInTrigger) ? poi._poiIdInTrigger : idInTrigger;
+
+  poi.name = `POI${tid}_${pid}`; // ← POI{トリガーID}_{0始まりID}
   return poi;
 }
 
