@@ -4092,19 +4092,15 @@ async function runViterbiTopK_Rerank_All_API_Dedupe(start, goal, restGroups, pro
 }
 
 function getAbViterbiOpt(ui){
-  const _ui = ui || readUI();
-
-  // auto=true のときは {}（autoBeamParams 側が効く前提）
-  if (_ui?.ab?.auto) return {};
+  // ui が渡されない呼び方にも一応耐える
+  ui = ui || readUI();
 
   const opt = {};
-  const bw = _ui?.ab?.beamWidth;
-  const tk = _ui?.ab?.topK;
-
-  if (Number.isFinite(bw) && bw > 0) opt.beamWidth = bw;
-  if (Number.isFinite(tk) && tk > 0) opt.topK = tk;
-
-  return opt;
+  if (!ui.ab.auto){
+    if (Number.isFinite(ui.ab.beamWidth) && ui.ab.beamWidth > 0) opt.beamWidth = ui.ab.beamWidth;
+    if (Number.isFinite(ui.ab.topK) && ui.ab.topK > 0) opt.topK = ui.ab.topK;
+  }
+  return opt; // auto=true のときは {}（autoBeamParams側が効く想定）
 }
 
 // lat/lon正規化（揺れ吸収）
@@ -4629,40 +4625,37 @@ function applyAutoNamesToAllPois(){
 // ★ 追加：UI値をまとめて読む（ID変更に強くする）
 // ===============================
 function readUI(){
-  // poiLimit: NaN/空/未入力でも default に落ちるように安全化
+  // ✅ CFG が無くても動くデフォルト
+  const DEFAULT_CAP_PER_TRIGGER = 5;     // poiLimit 未入力・壊れてた時の保険
+  const DEFAULT_PROFILE = 'cycling-road';
+
   const poiLimitRaw = Number(document.getElementById('poiLimit')?.value);
-  const poiLimitDefault = Number(CFG?.viterbi?.capPerTriggerDefault) || 5;
   const poiLimit = Math.max(
     1,
-    Number.isFinite(poiLimitRaw) ? Math.floor(poiLimitRaw) : poiLimitDefault
+    Number.isFinite(poiLimitRaw) ? Math.floor(poiLimitRaw) : DEFAULT_CAP_PER_TRIGGER
   );
 
-  // profileSelect が無い/未設定でも cycling-road
-  const profile = document.getElementById('profileSelect')?.value || 'cycling-road';
+  // profileSelect が無い場合もあるので保険
+  const profile = document.getElementById('profileSelect')?.value || DEFAULT_PROFILE;
 
-  // A/B 用UI
   const abAuto = !!document.getElementById('abAutoParams')?.checked;
-
-  const abBeamWidthRaw = Number(document.getElementById('abBeamWidth')?.value);
-  const abTopKRaw      = Number(document.getElementById('abTopK')?.value);
-
-  const abBeamWidth = Number.isFinite(abBeamWidthRaw) ? Math.floor(abBeamWidthRaw) : null;
-  const abTopK      = Number.isFinite(abTopKRaw) ? Math.floor(abTopKRaw) : null;
+  const abBeamWidth = Number(document.getElementById('abBeamWidth')?.value);
+  const abTopK = Number(document.getElementById('abTopK')?.value);
 
   return {
     poiLimit,
     profile,
     ab: {
       auto: abAuto,
-      beamWidth: abBeamWidth,
-      topK: abTopK,
+      beamWidth: Number.isFinite(abBeamWidth) ? Math.floor(abBeamWidth) : null,
+      topK: Number.isFinite(abTopK) ? Math.floor(abTopK) : null,
     }
   };
 }
-
 </script>
 </body>
 </html>
+
 
 
 
