@@ -2861,6 +2861,18 @@ async function runAlgoCompareDebug(){
 
         const t0 = performance.now();
         bfList = await runBruteforceOnce(start, goal, restGroups, profile);
+        // ★追加：bf_keyで重複除外（picksByTriggerの座標列）
+{
+  const before = bfList.length;
+  const uniq = new Map();
+  for (const r of bfList){
+    const key = comboKeyFromPicksByTrigger(r.picksByTrigger, 6);
+    if (!uniq.has(key)) uniq.set(key, r);
+  }
+  bfList = Array.from(uniq.values());
+  console.log('[BF dedupe] before=', before, ' after=', bfList.length);
+}
+        
         const t1 = performance.now();
 
         const ms = t1 - t0;
@@ -4930,3 +4942,4 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 </body>
 </html>
+
