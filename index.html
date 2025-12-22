@@ -183,6 +183,10 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 <button id="btnDownloadBfLegsCsv">総当たり：レグ明細CSV</button>
 <button id="btnDownloadVitLegsCsv">Viterbi：採用経路レグ明細CSV</button>
 
+<button id="btnDownloadVitAllEdgesCsv" disabled>
+  Viterbi：全POI間（DP評価エッジ）CSV
+</button>
+
 <label><input type="checkbox" id="dbg_beam" checked> ビーム</label>
 <label><input type="checkbox" id="dbg_bf" checked> 総当たり</label>
 <label><input type="checkbox" id="dbg_vit" checked> Viterbi</label>
@@ -2261,7 +2265,9 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     // start → 最初のトリガー
   for (let k = 0; k < Klist[0]; k++) {
     const poi = restGroups[0][k];
-    const leg = await calcLegCostWithApi(start, poi, profile);
+   const leg = await calcLegCostWithApiCached_VitDebug(start, poi, profile, {
+  phase: 'start->0', t_from: -1, t_to: 0, i: -1, j: k
+});
 
     const mse = legMseCost(
       leg.distKm,
@@ -2289,7 +2295,13 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
         const fromPoi = prevGroup[i];
         if (!Number.isFinite(dp[t - 1][i])) continue;
 
-        const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
+        const leg = await calcLegCostWithApiCached_VitDebug(fromPoi, toPoi, profile, {
+  phase: 'dp',
+  t_from: t - 1,
+  t_to: t,
+  i,
+  j
+});
 
         const mse = legMseCost(
           leg.distKm,
@@ -2322,7 +2334,13 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     if (!Number.isFinite(dp[lastT][k])) continue;
 
     const poi = restGroups[lastT][k];
-    const leg = await calcLegCostWithApi(poi, goal, profile);
+    const leg = await calcLegCostWithApiCached_VitDebug(poi, goal, profile, {
+  phase: 'last->goal',
+  t_from: lastT,
+  t_to: T,
+  i: k,
+  j: -1
+});
 
     const mse = legMseCost(
       leg.distKm,
@@ -2953,9 +2971,20 @@ if (isAlgoEnabled('dbg_vit')) {
     if (!vitGroups || !vitGroups.length) {
       panel.textContent += '(候補なし)\n';
     } else {
-      const t0 = performance.now();
-      const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
-      const t1 = performance.now();
+      // ★追加：Viterbiの全エッジ収集を開始
+window.__viterbiAllEdgeRows = [];
+window.__collectViterbiEdges = true;
+
+const t0 = performance.now();
+const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
+const t1 = performance.now();
+
+// ★追加：収集停止
+window.__collectViterbiEdges = false;
+
+// ★追加：ボタン有効化
+const btnAll = document.getElementById('btnDownloadVitAllEdgesCsv');
+if (btnAll) btnAll.disabled = !(window.__viterbiAllEdgeRows && window.__viterbiAllEdgeRows.length);
 
       const ms  = t1 - t0;
       const ors = API_USED.orsTotal - orsBefore;
@@ -2994,6 +3023,7 @@ if (isAlgoEnabled('dbg_vit')) {
       }
     }
   } catch (e) {
+     window.__collectViterbiEdges = false; // ★追加
     console.error('[viterbi] error', e);
     panel.textContent += '\n[viterbi エラー] ' + (e.message || e) + '\n';
   }
@@ -4580,7 +4610,12 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
       for (let i=0;i<Klist[t-1];i++){
         if (!Number.isFinite(dp[t-1][i])) continue;
         const fromPoi = restGroups[t-1][i];
-        const leg = await calcLegCostWithApiCached(fromPoi, toPoi, profile);
+        const leg = await calcLegCostWithApiCached_VitDebug(fromPoi, toPoi, profile, {
+  phase: 'dp',
+  t_from: t-1,
+  t_to: t,
+  i, j
+});
         const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
                                ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
         const cand = dp[t-1][i] + mse;
@@ -4795,6 +4830,70 @@ function downloadViterbiChosenLegsCsv(){
   downloadBlob(blob, 'viterbi_chosen_leg_details.csv');
 }
 
+function downloadViterbiAllEdgesCsv(){
+  const rows = window.__viterbiAllEdgeRows || [];
+  if (!rows.length){
+    alert('先にViterbi（dbg_vit）を実行してください');
+    return;
+  }
+
+  const header = [
+    'phase','t_from','t_to','i','j',
+    'from_name','to_name',
+    'from_lat','from_lon','to_lat','to_lon',
+    'dist_km','time_min','energy_kj',
+    'cache_hit','key'
+  ];
+
+  const bodyRows = rows.map(r => header.map(h => {
+    const v = r[h];
+    if (['phase','from_name','to_name','key'].includes(h)) return `"${csvEscape(v ?? '')}"`;
+    return (v ?? '');
+  }));
+
+  const blob = buildCsvBlob(header, bodyRows);
+  downloadBlob(blob, 'viterbi_all_edges.csv');
+}
+
+function recordVitEdge(meta, from, to, profile, leg, cacheHit){
+  const f = normLL(from), t = normLL(to);
+  window.__viterbiAllEdgeRows.push({
+    phase: meta?.phase ?? '',         // 'start->0' / 'dp' / 'last->goal'
+    t_from: meta?.t_from ?? '',       // -1(start) / 0..T-1 / T(goal側)
+    t_to:   meta?.t_to   ?? '',
+    i: meta?.i ?? '',                 // from候補index（DPなら i）
+    j: meta?.j ?? '',                 // to候補index（DPなら j）
+    from_name: from?.name || 'POI',
+    to_name:   to?.name   || 'POI',
+    from_lat: f?.lat ?? '',
+    from_lon: f?.lon ?? '',
+    to_lat:   t?.lat ?? '',
+    to_lon:   t?.lon ?? '',
+    dist_km:   leg?.distKm ?? '',
+    time_min:  leg?.timeMin ?? '',
+    energy_kj: leg?.energyKj ?? '',
+    cache_hit: cacheHit ? 1 : 0,
+    key: legKey(from, to, profile, 6)
+  });
+}
+
+// ★ Viterbiデバッグ用：キャッシュ判定 + 記録つき
+async function calcLegCostWithApiCached_VitDebug(from, to, profile, meta){
+  const key = legKey(from, to, profile, 6);
+  const hit = __legCache.has(key);
+
+  const leg = hit ? __legCache.get(key)
+                  : await calcLegCostWithApi(from, to, profile);
+
+  if (!hit) __legCache.set(key, leg);
+
+  // 記録（Viterbi実行中だけ有効化する）
+  if (window.__collectViterbiEdges){
+    recordVitEdge(meta, from, to, profile, leg, hit);
+  }
+  return leg;
+}
+
 // ======================================================
 // ボタン onclick 登録（CSVダウンロード）
 // ======================================================
@@ -4816,15 +4915,18 @@ document.addEventListener('DOMContentLoaded', () => {
       await downloadViterbiChosenLegsCsv();
     });
   }
+
+  // ★追加：Viterbi 全POI間（DP評価エッジ）CSV
+  const btnVitAll = document.getElementById('btnDownloadVitAllEdgesCsv');
+  if (btnVitAll) {
+    btnVitAll.addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('CLICK vit all edges');
+      downloadViterbiAllEdgesCsv();
+    });
+  }
 });
   
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
