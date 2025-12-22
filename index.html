@@ -2861,17 +2861,29 @@ async function runAlgoCompareDebug(){
 
         const t0 = performance.now();
         bfList = await runBruteforceOnce(start, goal, restGroups, profile);
+        // ★dedupe後に score 昇順で並べ直す（rankの整合性を保つ）
+bfList.sort((a,b)=>{
+  const sa = Number.isFinite(a?.score) ? a.score : Infinity;
+  const sb = Number.isFinite(b?.score) ? b.score : Infinity;
+  return sa - sb;
+});
         // ★追加：bf_keyで重複除外（picksByTriggerの座標列）
 {
   const before = bfList.length;
   const uniq = new Map();
   for (const r of bfList){
-    const key = comboKeyFromPicksByTrigger(r.picksByTrigger, 6);
+    const key = wpsKeyFromWps(r.wps, 6); // ★ORS入力(wps)で重複判定する
     if (!uniq.has(key)) uniq.set(key, r);
   }
   bfList = Array.from(uniq.values());
   console.log('[BF dedupe] before=', before, ' after=', bfList.length);
 }
+        // ★dedupe後に score 昇順で並べ直す
+ bfList.sort((a,b)=>{
+   const sa = Number.isFinite(a?.score) ? a.score : Infinity;
+   const sb = Number.isFinite(b?.score) ? b.score : Infinity;
+   return sa - sb;
+ });
         
         const t1 = performance.now();
 
@@ -2968,11 +2980,19 @@ async function runAlgoCompareDebug(){
       }
     }
 
-   // ----------------------------------------------------------
+// ----------------------------------------------------------
 // 4）Viterbi（API利用・DP：MSEのみ）
 // ----------------------------------------------------------
 if (isAlgoEnabled('dbg_vit')) {
   panel.textContent += '\n--- Viterbi（API利用・DP：MSEのみ） ---\n';
+
+  // ★ここで必ず初期化（毎回リセット）
+  window.__viterbiAllEdgeRows = [];
+  window.__collectViterbiEdges = true;
+
+  const btnAll = document.getElementById('btnDownloadVitAllEdgesCsv');
+  if (btnAll) btnAll.disabled = true; // ★開始時はいったん無効化
+
   try {
     const orsBefore = API_USED.orsTotal;
     const ovpBefore = API_USED.overpassTotal;
@@ -2982,62 +3002,61 @@ if (isAlgoEnabled('dbg_vit')) {
 
     if (!vitGroups || !vitGroups.length) {
       panel.textContent += '(候補なし)\n';
-    } else {
-      // ★追加：Viterbiの全エッジ収集を開始
-window.__viterbiAllEdgeRows = [];
-window.__collectViterbiEdges = true;
-
-const t0 = performance.now();
-const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
-const t1 = performance.now();
-
-// ★追加：収集停止
-window.__collectViterbiEdges = false;
-
-// ★追加：ボタン有効化
-const btnAll = document.getElementById('btnDownloadVitAllEdgesCsv');
-if (btnAll) btnAll.disabled = !(window.__viterbiAllEdgeRows && window.__viterbiAllEdgeRows.length);
-
-      const ms  = t1 - t0;
-      const ors = API_USED.orsTotal - orsBefore;
-      const ov  = API_USED.overpassTotal - ovpBefore;
-
-      if (!vitList || !vitList.length) {
-        panel.textContent += '(候補なし)\n';
-      } else {
-        attachBfRank(vitList, bfRankMap);
-
-        panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
-        panel.textContent += `ORS呼び出し: ${ors} 回\n`;
-        panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
-
-        // ★追加：採用経路（best 1本）のレグ明細を作って保持＆ボタン有効化
-        try {
-          const ideals = getIdealPerLegs();
-          const sortedVit = sortResultsByUnifiedScore(vitList, ideals.idealEnergyPerLeg);
-          const best = sortedVit[0];
-
-          window.__viterbiChosenLegRows = await buildChosenLegsRows(
-            start, goal, best.picks, profile
-          );
-
-          const btnVit = document.getElementById('btnDownloadVitLegsCsv');
-          if (btnVit) btnVit.disabled = !(window.__viterbiChosenLegRows && window.__viterbiChosenLegRows.length);
-        } catch (e2) {
-          console.warn('[viterbi] buildChosenLegsRows fail', e2);
-          window.__viterbiChosenLegRows = [];
-          const btnVit = document.getElementById('btnDownloadVitLegsCsv');
-          if (btnVit) btnVit.disabled = true;
-        }
-
-        showAlgoListInPanel(panel, vitList, 'viterbi');
-        pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
-      }
+      return;
     }
+
+    const t0 = performance.now();
+    const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
+    const t1 = performance.now();
+
+    const ms  = t1 - t0;
+    const ors = API_USED.orsTotal - orsBefore;
+    const ov  = API_USED.overpassTotal - ovpBefore;
+
+    if (!vitList || !vitList.length) {
+      panel.textContent += '(候補なし)\n';
+      return;
+    }
+
+    attachBfRank(vitList, bfRankMap);
+
+    panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+    panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+    panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+    // 採用経路（best 1本）のレグ明細
+    try {
+      const ideals = getIdealPerLegs();
+      const sortedVit = sortResultsByUnifiedScore(vitList, ideals.idealEnergyPerLeg);
+      const best = sortedVit[0];
+
+      window.__viterbiChosenLegRows = await buildChosenLegsRows(
+        start, goal, best.picks, profile
+      );
+
+      const btnVit = document.getElementById('btnDownloadVitLegsCsv');
+      if (btnVit) btnVit.disabled = !(window.__viterbiChosenLegRows && window.__viterbiChosenLegRows.length);
+    } catch (e2) {
+      console.warn('[viterbi] buildChosenLegsRows fail', e2);
+      window.__viterbiChosenLegRows = [];
+      const btnVit = document.getElementById('btnDownloadVitLegsCsv');
+      if (btnVit) btnVit.disabled = true;
+    }
+
+    showAlgoListInPanel(panel, vitList, 'viterbi');
+    pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
+
   } catch (e) {
-     window.__collectViterbiEdges = false; // ★追加
     console.error('[viterbi] error', e);
     panel.textContent += '\n[viterbi エラー] ' + (e.message || e) + '\n';
+
+  } finally {
+    // ★ここが最重要：成功でも失敗でも必ず止める
+    window.__collectViterbiEdges = false;
+
+    // ★ボタン状態も最終的に必ず確定
+    const btnAll2 = document.getElementById('btnDownloadVitAllEdgesCsv');
+    if (btnAll2) btnAll2.disabled = !(window.__viterbiAllEdgeRows && window.__viterbiAllEdgeRows.length);
   }
 }
 
@@ -4906,6 +4925,16 @@ async function calcLegCostWithApiCached_VitDebug(from, to, profile, meta){
   return leg;
 }
 
+function wpsKeyFromWps(wps, decimals = 6){
+  const f = x => Number(x).toFixed(decimals);
+  return (wps||[]).map(p=>{
+    const lat = Number(p?.lat ?? p?.latitude);
+    const lon = Number(p?.lon ?? p?.lng ?? p?.longitude);
+    if(!Number.isFinite(lat) || !Number.isFinite(lon)) return 'bad';
+    return `${f(lat)},${f(lon)}`;
+  }).join('||');
+}
+
 // ======================================================
 // ボタン onclick 登録（CSVダウンロード）
 // ======================================================
@@ -4942,5 +4971,6 @@ document.addEventListener('DOMContentLoaded', () => {
 </script>
 </body>
 </html>
+
 
 
