@@ -2258,8 +2258,30 @@ async function calcLegCostWithApi(from, to, profile){
     const distKm  = (Number(summary.distance) || 0) / 1000;
     const timeMin = (Number(summary.duration) || 0) / 60;
 
-    let energyKj = sumNums(out?.stats?.energy);
-    if (!Number.isFinite(energyKj)) energyKj = 0;
+    // --- energy 抽出（返り値の揺れを吸収） ---
+const ene =
+  out?.stats?.energy ??   // 期待形（区間配列 or 累積配列）
+  out?.stats?.E ??        // 別名候補
+  out?.stats?.cumE ??     // 別名候補
+  null;
+
+let energyKj = 0;
+
+// 1) 配列なら「累積っぽい→末尾」「区間っぽい→sum」どっちでも破綻しないようにする
+if (Array.isArray(ene) && ene.length) {
+  const last = Number(ene[ene.length - 1]);
+  if (Number.isFinite(last) && last > 0) {
+    energyKj = last;           // 累積配列なら末尾が総量
+  } else {
+    energyKj = sumNums(ene);   // 区間配列なら合計
+  }
+// 2) 単発の数値で返ってきた場合
+} else if (Number.isFinite(Number(ene))) {
+  energyKj = Number(ene);
+// 3) それ以外は0
+} else {
+  energyKj = 0;
+}
 
     if (window.__collectViterbiEdges) {
       window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
@@ -4740,7 +4762,7 @@ function downloadViterbiEdgesCsv(){
       r.toLon ?? '',
       r.distKm ?? '',
       r.timeMin ?? '',
-      r.energyKJ ?? '',
+      r.energyKj ?? '',
       `"${esc(r.profile)}"`,
       r.ms ?? '',
       r.cacheHit ? 1 : 0,
@@ -4858,6 +4880,7 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
 
