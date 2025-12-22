@@ -50,7 +50,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   <summary>休憩地点まわりのPOI</summary>
   <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
     <label><input type="checkbox" id="poiToggle" checked> POI表示</label>
-    <label>初期半径 <input id="poiRadius" type="number" value="500" min="50" step="50"> m</label>
+    <label>初期半径 <input id="poiRadius" type="number" value="50000" min="50" step="50"> m</label>
     <label>件数上限（近い順） <input id="poiLimit" type="number" value="5" min="1" step="1"> 件</label>
     <label><input type="checkbox" id="chkConvenience" checked> コンビニ</label>
     <label><input type="checkbox" id="chkSuper" checked> スーパー</label>
@@ -213,31 +213,11 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 
 <!-- アルゴリズム比較デバッグ用のバーのどこかに追加 -->
 
-
 <script>
 /* ====== 設定 ====== */
-const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
-// const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
+// const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
+const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
 const ORS_ROOT = 'https://api.openrouteservice.org';
-
-// ============================
-// ✅ CFG が無い環境でも動くためのミニ定義
-// （既に CFG があるなら上書きしない）
-// ============================
-window.CFG = window.CFG || {};
-
-CFG.viterbi = CFG.viterbi || {};
-CFG.linear  = CFG.linear  || {};
-CFG.ui      = CFG.ui      || {};
-
-// 対策A/B/C/D/E/F 周りで参照されている可能性が高いものだけ最低限用意
-if (!Number.isFinite(CFG.viterbi.capPerTriggerDefault)) CFG.viterbi.capPerTriggerDefault = 5;
-if (!Number.isFinite(CFG.viterbi.beamZeroApiWidth))     CFG.viterbi.beamZeroApiWidth     = 12;
-
-if (!Number.isFinite(CFG.linear.candPerTrigger))        CFG.linear.candPerTrigger        = 5;
-
-// showTop は linear の表示件数で使ってたので最低限
-if (!Number.isFinite(CFG.ui.showTop))                   CFG.ui.showTop                   = 3;
 
 /* ====== ヘルパ ====== */
 let map, pts=[], markerLayer, routeLayers={}, lastDirTs=0;
@@ -251,20 +231,6 @@ let OVERPASS_CALL_TOTAL = 0;  // Overpass API の累計呼び出し回数
 let restBeamLayer;   // トリガー ↔ POI の道のりビーム用レイヤー
 
 /* ===== 共通ユーティリティ ===== */
-
-async function measureApiUsed(fn){
-  const orsBefore = API_USED.orsTotal;
-  const ovpBefore = API_USED.overpassTotal;
-  const t0 = performance.now();
-  const result = await fn();
-  const t1 = performance.now();
-  return {
-    result,
-    ms: t1 - t0,
-    ors: API_USED.orsTotal - orsBefore,
-    ov:  API_USED.overpassTotal - ovpBefore,
-  };
-}
 
 // restGroups の要素が
 // 形①: {rest, pois:[...]} でも 形②: [...] でも同じように POI配列を取り出す
@@ -1204,7 +1170,7 @@ tEnd(tkRest, `hits=${rests.length}`);
 
       // POI検索（半径固定・近い順に n 件）
 if ($('poiToggle').checked) {
-  const baseRadius = Number($('poiRadius').value) || 500;
+  const baseRadius = Number($('poiRadius').value) || 50000;
   const limit = Math.max(1, Number($('poiLimit').value) || 5);
   // ★ ここで今回の休憩場所検索開始時点のカウントを記録
   const overpassBefore = OVERPASS_CALL_TOTAL;
@@ -2439,7 +2405,7 @@ function renderLinearResults(rows){
   if(!cont || !sum) return;
 
   // --- 上位3件のみ表示 ---
-  const SHOW = CFG.ui.showTop;
+  const SHOW = 3;
   const shown = rows.slice(0, SHOW);
 
   // CSV全件は保持（UIは3件）
@@ -2535,15 +2501,13 @@ function bindLinearButtonsOnce(){
   calcBtn.onclick = ()=>{
     try{
       const {start, goal} = getStartGoalPoints();
-      const groups = makeCandGroupsFromRestGroups(restGroups, CFG.linear.candPerTrigger, defaultLinearSorter);
+      const groups = makeCandGroupsFromRestGroups(restGroups, 5, defaultLinearSorter);
       // 総組合せチェック（多すぎる場合は注意だけ出す）
       const total = groups.reduce((a,b)=>a*b.length,1);
-      const hardCap = CFG.linear.hardCap;
-
-if(total > hardCap){
-  if(!confirm(`組合せが ${total.toLocaleString()} 件あります。上限${hardCap.toLocaleString()}件まで計算します。続行しますか？`)) return;
-}
-const combos = enumerateAllOnePerTrigger(groups, hardCap);
+      if(total > 200000){
+        if(!confirm(`組合せが ${total.toLocaleString()} 件あります。上限20万件まで計算します。続行しますか？`)) return;
+      }
+      const combos = enumerateAllOnePerTrigger(groups, /*hardCap*/200000);
 
       // 距離計算
       const rows = combos.map(idxPicks=>{
@@ -2838,17 +2802,9 @@ async function runAlgoCompareDebug(){
     ensureProjections();
     const cumTotals = window.__cumTotals;
 
-    const ui = readUI();
-    const profile = ui.profile;
-
-    // ★ここ追加：poiLimitを「一度だけ」確定（以後これだけを使う）
-    const capPerTrigger = Math.max(
-      1,
-      Number.isFinite(Number(ui.poiLimit)) ? Math.floor(Number(ui.poiLimit)) : (CFG.viterbi.capPerTriggerDefault ?? 5)
-    );
-
     const start = pts.find(p => p.type === 'start') || pts[0];
     const goal  = pts.find(p => p.type === 'goal')  || pts[pts.length - 1];
+    const profile = 'cycling-road';
 
     panel.textContent += '====== アルゴリズム比較デバッグ ======\n\n';
 
@@ -2905,6 +2861,7 @@ async function runAlgoCompareDebug(){
         const ors = API_USED.orsTotal - orsBefore;
         const ov  = API_USED.overpassTotal - ovpBefore;
 
+        // bf ONのときだけ付く（OFFなら何もしない）
         attachBfRank(beamList, bfRankMap);
 
         panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
@@ -2926,7 +2883,7 @@ async function runAlgoCompareDebug(){
         const ovpBefore = API_USED.overpassTotal;
 
         const t0 = performance.now();
-        const groups = topPoisPerTriggerForLinear(CFG.linear.candPerTrigger);
+        const groups = topPoisPerTriggerForLinear(5);
 
         if (!groups || !groups.length) {
           panel.textContent += '(候補なし)\n';
@@ -2947,8 +2904,7 @@ async function runAlgoCompareDebug(){
           panel.textContent += `ORS呼び出し: ${ors} 回\n`;
           panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
 
-          const SHOW = CFG.ui.showTop;
-          showAlgoListInPanel(panel, linearRows.slice(0, SHOW), 'linear');
+          showAlgoListInPanel(panel, linearRows.slice(0, 3), 'linear');
           pushAlgoResultsForCsv('linear','直線距離（全組合せ）',linearRows,ms,ors,ov);
         }
       } catch (e) {
@@ -2966,7 +2922,7 @@ async function runAlgoCompareDebug(){
         const orsBefore = API_USED.orsTotal;
         const ovpBefore = API_USED.overpassTotal;
 
-        // ★統一：capPerTrigger を冒頭の値で固定
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
         const vitGroups = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
 
         if (!vitGroups || !vitGroups.length) {
@@ -3008,12 +2964,13 @@ async function runAlgoCompareDebug(){
         const orsBefore = API_USED.orsTotal;
         const ovpBefore = API_USED.overpassTotal;
 
-        const groupsA = makeCandGroupsFromRestGroups(restGroups, capPerTrigger, defaultLinearSorter);
+        const groupsA = makeCandGroupsFromRestGroups(restGroups, 5, defaultLinearSorter);
+
         if (!groupsA || !groupsA.length) {
           panel.textContent += '(候補なし)\n';
         } else {
           const t0 = performance.now();
-          const aOpt  = getAbViterbiOpt(ui);
+          const aOpt  = getAbViterbiOpt();
           const aList = await runViterbiTopK_Rerank_All_API(start, goal, groupsA, profile, aOpt);
           const t1 = performance.now();
 
@@ -3053,13 +3010,13 @@ async function runAlgoCompareDebug(){
         const orsBefore = API_USED.orsTotal;
         const ovpBefore = API_USED.overpassTotal;
 
-        const groupsB = makeCandGroupsFromRestGroups(restGroups, capPerTrigger, defaultLinearSorter);
+        const groupsB = makeCandGroupsFromRestGroups(restGroups, 5, defaultLinearSorter);
 
         if (!groupsB || !groupsB.length) {
           panel.textContent += '(候補なし)\n';
         } else {
           const t0 = performance.now();
-          const bOpt  = getAbViterbiOpt(ui);
+          const bOpt  = getAbViterbiOpt();
           const bList = await runViterbiTopK_Rerank_All_API_Dedupe(start, goal, groupsB, profile, bOpt);
           const t1 = performance.now();
 
@@ -3095,7 +3052,7 @@ async function runAlgoCompareDebug(){
         const orsBefore = API_USED.orsTotal;
         const ovpBefore = API_USED.overpassTotal;
 
-        // ★修正：ここで poiLimit を読み直さない。冒頭の capPerTrigger を使う
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
         const groupsC = makeCandGroupsFromRestGroups(restGroups, capPerTrigger)
           .map(g => Array.isArray(g) ? g.filter(Boolean) : [])
           .filter(g => g.length > 0);
@@ -3105,8 +3062,9 @@ async function runAlgoCompareDebug(){
         } else {
           const t0 = performance.now();
 
+          // ここはあなたが使ってるC関数に合わせてOK（今は BeamFull を呼んでる形）
           const cList = await runViterbiOnce_API_C_BeamFull(start, goal, groupsC, profile, {
-            beamWidth: CFG.viterbi.beamZeroApiWidth
+            beamWidth: 12
           });
 
           const t1 = performance.now();
@@ -3144,7 +3102,7 @@ async function runAlgoCompareDebug(){
 
         const t0 = performance.now();
         const prog = await runViterbi_D_Progressive(start, goal, restGroups, profile, {
-          capPerTrigger, // ★OK：冒頭の値を渡す
+          capPerTrigger: 5,
           sorter: defaultLinearSorter
         });
         const t1 = performance.now();
@@ -3185,12 +3143,12 @@ async function runAlgoCompareDebug(){
         const ovpBefore = API_USED.overpassTotal;
 
         if (window.__legCache && typeof window.__legCache.clear === 'function'){
-          window.__legCache.clear();
+          window.__legCache.clear(); // 測定を綺麗にしたいなら
         } else if (typeof __legCache !== 'undefined' && __legCache?.clear){
           __legCache.clear();
         }
 
-        // ★修正：ここで poiLimit を読み直さない。冒頭の capPerTrigger を使う
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
         const groupsE = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
 
         const t0 = performance.now();
@@ -3228,11 +3186,11 @@ async function runAlgoCompareDebug(){
         const orsBefore = API_USED.orsTotal;
         const ovpBefore = API_USED.overpassTotal;
 
-        // ★修正：ここで poiLimit を読み直さない。冒頭の capPerTrigger を使う
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
         const groupsF = makeCandGroupsFromRestGroups(restGroups, capPerTrigger, defaultLinearSorter);
 
         const t0 = performance.now();
-        const fOpt = getAbViterbiOpt(ui); // A/BのUI流用
+        const fOpt = getAbViterbiOpt(); // A/BのUI流用
         const fList = await runViterbi_F_TopN_ThenFullORS(start, goal, groupsF, profile, fOpt);
         const t1 = performance.now();
 
@@ -3983,7 +3941,7 @@ function autoBeamParams(restGroups, opt = {}){
   // 候補が少ないならビームを広げても意味が薄いので抑える
   // 逆に候補が多いときは少し増やす
   if (Kavg <= 3) beamWidth = Math.min(beamWidth, 18);
-  if (Kavg >= 10) beamWidth = Math.min(CFG.viterbi.autoBeam.maxBeamWidth, Math.floor(beamWidth * 1.25));
+  if (Kavg >= 10) beamWidth = Math.min(60, Math.floor(beamWidth * 1.25));
 
   // beamWidth は「各段で残す本数」なので、各トリガー候補より大きくしてもムダになりがち
   // 目安として Kmin*3 くらいを上限にしておく（Kminが小さいときの無駄防止）
@@ -3999,7 +3957,7 @@ function autoBeamParams(restGroups, opt = {}){
                  180; // 6以上は上限
 
   // rerank をするなら topK は大きすぎると ORS 追加呼び出しが増えがち → 上限
-  topK = Math.min(topK, CFG.viterbi.autoBeam.maxTopK);
+  topK = Math.min(topK, 200);
 
   // --- ユーザー指定があれば優先（明示指定は最強） ---
   if (opt.beamWidth != null) beamWidth = Math.max(1, Number(opt.beamWidth) || 1);
@@ -4110,27 +4068,18 @@ async function runViterbiTopK_Rerank_All_API_Dedupe(start, goal, restGroups, pro
   });
 }
 
-function getAbViterbiOpt(ui){
-  ui = ui || readUI();
+function getAbViterbiOpt(){
+  const auto = !!document.getElementById('abAutoParams')?.checked;
 
-  // ✅ auto=trueでも "明示パラメータ" を返す（autoBeamParams側に行かせない狙い）
-  // ※runViterbiTopK_API が opt.beamWidth / opt.topK を優先して使う実装なら効果あり
+  const bw = Number(document.getElementById('abBeamWidth')?.value);
+  const tk = Number(document.getElementById('abTopK')?.value);
+
   const opt = {};
-
-  const bw = ui.ab.beamWidth;
-  const tk = ui.ab.topK;
-
-  // auto=true のときは UI値が空でも CFGのデフォルトに落とす
-  if (ui.ab.auto) {
-    opt.beamWidth = Number.isFinite(bw) && bw > 0 ? bw : (CFG?.viterbi?.beamWidthDefault ?? 40);
-    opt.topK      = Number.isFinite(tk) && tk > 0 ? tk : (CFG?.viterbi?.topKDefault ?? 150);
-    return opt;
+  if (!auto){
+    if (Number.isFinite(bw) && bw > 0) opt.beamWidth = Math.floor(bw);
+    if (Number.isFinite(tk) && tk > 0) opt.topK      = Math.floor(tk);
   }
-
-  // auto=false の通常挙動
-  if (Number.isFinite(bw) && bw > 0) opt.beamWidth = bw;
-  if (Number.isFinite(tk) && tk > 0) opt.topK = tk;
-  return opt;
+  return opt; // auto=true のときは {} を返す（autoBeamParamsが効く）
 }
 
 // lat/lon正規化（揺れ吸収）
@@ -4651,44 +4600,6 @@ function applyAutoNamesToAllPois(){
   }
 }
 
-// ===============================
-// ★ 追加：UI値をまとめて読む（ID変更に強くする）
-// ===============================
-function readUI(){
-  // ✅ CFG が無くても動くデフォルト
-  const DEFAULT_CAP_PER_TRIGGER = 5;     // poiLimit 未入力・壊れてた時の保険
-  const DEFAULT_PROFILE = 'cycling-road';
-
-  const poiLimitRaw = Number(document.getElementById('poiLimit')?.value);
-  const poiLimit = Math.max(
-    1,
-    Number.isFinite(poiLimitRaw) ? Math.floor(poiLimitRaw) : DEFAULT_CAP_PER_TRIGGER
-  );
-
-  // profileSelect が無い場合もあるので保険
-  const profile = document.getElementById('profileSelect')?.value || DEFAULT_PROFILE;
-
-  const abAuto = !!document.getElementById('abAutoParams')?.checked;
-  const abBeamWidth = Number(document.getElementById('abBeamWidth')?.value);
-  const abTopK = Number(document.getElementById('abTopK')?.value);
-
-  return {
-    poiLimit,
-    profile,
-    ab: {
-      auto: abAuto,
-      beamWidth: Number.isFinite(abBeamWidth) ? Math.floor(abBeamWidth) : null,
-      topK: Number.isFinite(abTopK) ? Math.floor(abTopK) : null,
-    }
-  };
-}
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
