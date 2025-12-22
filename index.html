@@ -180,8 +180,13 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   </details>
 </div>
 
-<button id="btnDownloadBfLegsCsv" disabled>総当たり：レグ明細CSV</button>
-<button id="btnDownloadVitLegsCsv" disabled>Viterbi：採用経路レグ明細CSV</button>
+<button id="btnDlBfLegCsv" onclick="console.log('CLICK bf'); downloadBfLegDetailCsv();">
+  総当たり：レグ明細CSV
+</button>
+
+<button id="btnDlVitLegCsv" onclick="console.log('CLICK vit'); downloadVitLegDetailCsv();">
+  Viterbi：採用経路レグ明細CSV
+</button>
 
 <label><input type="checkbox" id="dbg_beam" checked> ビーム</label>
 <label><input type="checkbox" id="dbg_bf" checked> 総当たり</label>
@@ -4772,5 +4777,6 @@ downloadViterbiChosenLegsCsv
 </script>
 </body>
 </html>
+
 
 
