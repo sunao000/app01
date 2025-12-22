@@ -4766,7 +4766,47 @@ function bindViterbiEdgeUi(){
   if (btnDl) btnDl.onclick = () => downloadViterbiEdgesCsv();
 }
 
+function bindViterbiEdgeButtons(){
+  const $ = (id)=>document.getElementById(id);
+
+  const btnShow = $('btnShowViterbiEdges');
+  const btnHide = $('btnHideViterbiEdges');
+  const btnCsv  = $('btnDlViterbiEdgesCsv');
+
+  console.log('[bind] show=', !!btnShow, 'hide=', !!btnHide, 'csv=', !!btnCsv);
+
+  // 既に同じイベントを多重登録しないためのガード（任意だがおすすめ）
+  if (btnShow && !btnShow.dataset.bound) {
+    btnShow.addEventListener('click', () => {
+      console.log('[click] show viterbi edges');
+      window.__collectViterbiEdges = true;        // 収集ON（あなたの設計に合わせて）
+      renderViterbiEdgesPanel?.(true);            // UI描画（あるなら）
+    });
+    btnShow.dataset.bound = '1';
+  }
+
+  if (btnHide && !btnHide.dataset.bound) {
+    btnHide.addEventListener('click', () => {
+      console.log('[click] hide viterbi edges');
+      window.__collectViterbiEdges = false;       // 収集OFF
+      renderViterbiEdgesPanel?.(false);
+    });
+    btnHide.dataset.bound = '1';
+  }
+
+  if (btnCsv && !btnCsv.dataset.bound) {
+    btnCsv.addEventListener('click', () => {
+      console.log('[click] download viterbi edges csv');
+      downloadViterbiEdgesCsv();                  // CSV DL関数（後述の形で用意）
+    });
+    btnCsv.dataset.bound = '1';
+  }
+}
+
+// DOMができてから確実にbind
+document.addEventListener('DOMContentLoaded', bindViterbiEdgeButtons);
 
 </script>
 </body>
 </html>
+
