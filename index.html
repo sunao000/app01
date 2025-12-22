@@ -180,6 +180,9 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   </details>
 </div>
 
+<button id="btnDownloadBfLegsCsv" disabled>総当たり：レグ明細CSV</button>
+<button id="btnDownloadVitLegsCsv" disabled>Viterbi：採用経路レグ明細CSV</button>
+
 <label><input type="checkbox" id="dbg_beam" checked> ビーム</label>
 <label><input type="checkbox" id="dbg_bf" checked> 総当たり</label>
 <label><input type="checkbox" id="dbg_vit" checked> Viterbi</label>
@@ -2743,14 +2746,15 @@ const score    = eScore;
 const rawScore = eScore;
 
 
-      results.push({
-        score,           // MSEスコア（小さいほど「理想ペースに近い」）
-        rawScore,        // 今は score と同じ（CSVなどで使いやすいよう一応残す）
-        feature,         // ORS の GeoJSON Feature
-        picks,           // 実際に経由した POI の配列
-        picksByTrigger: cmb, // トリガーごとの採用状況（null を含み得る）
-        stats            // {dist:[], time:[], energy:[]} 区間ごとの値
-      });
+results.push({
+  score,
+  rawScore,
+  feature,
+  wps,                 // ★追加：start→...→goal の waypoint 列
+  picks,
+  picksByTrigger: cmb,
+  stats
+});
       okCount++;
     } catch (e){
       console.warn('runBruteforceOnce: combo route fail', e);
@@ -2834,6 +2838,11 @@ async function runAlgoCompareDebug(){
         panel.textContent += `Overpass呼び出し: ${ov} 回\n`;
         panel.textContent += `組合せ数: ${bfList.length} 件\n\n`;
 
+        // ★追加：総当たりのレグ明細を作って保持
+        window.__bfLegDetailRows = buildBruteforceLegRows(bfList);
+        const btnBf = document.getElementById('btnDownloadBfLegsCsv');
+        if (btnBf) btnBf.disabled = !(window.__bfLegDetailRows && window.__bfLegDetailRows.length);
+
         bfRankMap = buildBfRankMap(bfList);
         attachBfRank(bfList, bfRankMap);
 
@@ -2913,47 +2922,66 @@ async function runAlgoCompareDebug(){
       }
     }
 
-    // ----------------------------------------------------------
-    // 4）Viterbi（API利用・DP：MSEのみ）
-    // ----------------------------------------------------------
-    if (isAlgoEnabled('dbg_vit')) {
-      panel.textContent += '\n--- Viterbi（API利用・DP：MSEのみ） ---\n';
-      try {
-        const orsBefore = API_USED.orsTotal;
-        const ovpBefore = API_USED.overpassTotal;
+   // ----------------------------------------------------------
+// 4）Viterbi（API利用・DP：MSEのみ）
+// ----------------------------------------------------------
+if (isAlgoEnabled('dbg_vit')) {
+  panel.textContent += '\n--- Viterbi（API利用・DP：MSEのみ） ---\n';
+  try {
+    const orsBefore = API_USED.orsTotal;
+    const ovpBefore = API_USED.overpassTotal;
 
-        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
-        const vitGroups = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
+    const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
+    const vitGroups = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
 
-        if (!vitGroups || !vitGroups.length) {
-          panel.textContent += '(候補なし)\n';
-        } else {
-          const t0 = performance.now();
-          const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
-          const t1 = performance.now();
+    if (!vitGroups || !vitGroups.length) {
+      panel.textContent += '(候補なし)\n';
+    } else {
+      const t0 = performance.now();
+      const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
+      const t1 = performance.now();
 
-          const ms  = t1 - t0;
-          const ors = API_USED.orsTotal - orsBefore;
-          const ov  = API_USED.overpassTotal - ovpBefore;
+      const ms  = t1 - t0;
+      const ors = API_USED.orsTotal - orsBefore;
+      const ov  = API_USED.overpassTotal - ovpBefore;
 
-          if (!vitList || !vitList.length) {
-            panel.textContent += '(候補なし)\n';
-          } else {
-            attachBfRank(vitList, bfRankMap);
+      if (!vitList || !vitList.length) {
+        panel.textContent += '(候補なし)\n';
+      } else {
+        attachBfRank(vitList, bfRankMap);
 
-            panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
-            panel.textContent += `ORS呼び出し: ${ors} 回\n`;
-            panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+        panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+        panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+        panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
 
-            showAlgoListInPanel(panel, vitList, 'viterbi');
-            pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
-          }
+        // ★追加：採用経路（best 1本）のレグ明細を作って保持＆ボタン有効化
+        try {
+          const ideals = getIdealPerLegs();
+          const sortedVit = sortResultsByUnifiedScore(vitList, ideals.idealEnergyPerLeg);
+          const best = sortedVit[0];
+
+          window.__viterbiChosenLegRows = await buildChosenLegsRows(
+            start, goal, best.picks, profile
+          );
+
+          const btnVit = document.getElementById('btnDownloadVitLegsCsv');
+          if (btnVit) btnVit.disabled = !(window.__viterbiChosenLegRows && window.__viterbiChosenLegRows.length);
+        } catch (e2) {
+          console.warn('[viterbi] buildChosenLegsRows fail', e2);
+          window.__viterbiChosenLegRows = [];
+          const btnVit = document.getElementById('btnDownloadVitLegsCsv');
+          if (btnVit) btnVit.disabled = true;
         }
-      } catch (e) {
-        console.error('[viterbi] error', e);
-        panel.textContent += '\n[viterbi エラー] ' + (e.message || e) + '\n';
+
+        showAlgoListInPanel(panel, vitList, 'viterbi');
+        pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
       }
     }
+  } catch (e) {
+    console.error('[viterbi] error', e);
+    panel.textContent += '\n[viterbi エラー] ' + (e.message || e) + '\n';
+  }
+}
 
     // ----------------------------------------------------------
     // 5）対策A：TopK増 + beamWidth増（再ランキング）
@@ -3562,6 +3590,35 @@ function downloadBruteforceCsv(){
 
   const blob = buildCsvBlob(header, bodyRows);
   downloadBlob(blob, 'bruteforce_all_combos.csv');
+}
+
+function downloadBruteforceLegsCsv(){
+  const rows = window.__bfLegDetailRows || [];
+  if (!rows.length){
+    alert('先に総当たり（dbg_bf）を実行してください');
+    return;
+  }
+
+  const header = [
+    'combo_rank','combo_score','bf_key',
+    'total_dist_km','total_time_min','total_energy_kj',
+    'poi_names',
+    'leg_index',
+    'from_name','to_name',
+    'from_lat','from_lon','to_lat','to_lon',
+    'leg_dist_km','leg_time_min','leg_energy_kj'
+  ];
+
+  const bodyRows = rows.map(r => header.map(h => {
+    const v = r[h];
+    if (['poi_names','from_name','to_name','bf_key'].includes(h)){
+      return `"${csvEscape(v ?? '')}"`;
+    }
+    return (v ?? '');
+  }));
+
+  const blob = buildCsvBlob(header, bodyRows);
+  downloadBlob(blob, 'bruteforce_leg_details.csv');
 }
 
 // トリガー ↔ POI のビームを全部消す
@@ -4600,6 +4657,119 @@ function applyAutoNamesToAllPois(){
   }
 }
 
+function buildBruteforceLegRows(bfList){
+  const rows = [];
+  (bfList || []).forEach((r, comboIdx)=>{
+    const comboRank = comboIdx + 1;
+
+    const wps  = Array.isArray(r.wps) ? r.wps : [];
+    const dist = r.stats?.dist   || [];
+    const time = r.stats?.time   || [];
+    const ene  = r.stats?.energy || [];
+
+    const totalDistKm   = sumNums(dist);
+    const totalTimeMin  = sumNums(time);
+    const totalEnergyKJ = sumNums(ene);
+
+    const poiNames = (r.picksByTrigger || [])
+      .filter(Boolean)
+      .map(p=>p.name || 'POI')
+      .join(' -> ');
+
+    const nLeg = Math.max(dist.length, time.length, ene.length);
+
+    for (let i=0; i<nLeg; i++){
+      const from = wps[i]   || null;
+      const to   = wps[i+1] || null;
+
+      rows.push({
+        combo_rank: comboRank,
+        combo_score: r.score ?? '',
+        bf_key: comboKeyFromPicksByTrigger(r.picksByTrigger, 6),
+
+        total_dist_km: totalDistKm,
+        total_time_min: totalTimeMin,
+        total_energy_kj: totalEnergyKJ,
+        poi_names: poiNames,
+
+        leg_index: i+1,
+        from_name: from?.name || '',
+        to_name:   to?.name   || '',
+        from_lat:  from?.lat ?? '',
+        from_lon:  from?.lon ?? '',
+        to_lat:    to?.lat ?? '',
+        to_lon:    to?.lon ?? '',
+
+        leg_dist_km: dist[i] ?? '',
+        leg_time_min: time[i] ?? '',
+        leg_energy_kj: ene[i] ?? '',
+      });
+    }
+  });
+  return rows;
+}
+
+async function buildChosenLegsRows(start, goal, picks, profile){
+  const pts = [start, ...(picks||[]), goal].map(p => ({
+    lat: p.lat, lon: p.lon, name: p.name || 'POI'
+  }));
+
+  const rows = [];
+  let sumD=0, sumT=0, sumE=0;
+
+  for (let i=0;i<pts.length-1;i++){
+    const leg = await calcLegCostWithApiCached(pts[i], pts[i+1], profile);
+
+    const d = Number(leg.distKm ?? (leg.dist/1000));
+    const t = Number(leg.timeMin ?? (leg.time/60));
+    const e = Number(leg.energyKj ?? leg.energy);
+
+    if (Number.isFinite(d)) sumD += d;
+    if (Number.isFinite(t)) sumT += t;
+    if (Number.isFinite(e)) sumE += e;
+
+    rows.push({
+      leg_index: i+1,
+      from_name: pts[i].name,
+      to_name: pts[i+1].name,
+      from_lat: pts[i].lat, from_lon: pts[i].lon,
+      to_lat: pts[i+1].lat, to_lon: pts[i+1].lon,
+      leg_dist_km: Number.isFinite(d) ? d : '',
+      leg_time_min: Number.isFinite(t) ? t : '',
+      leg_energy_kj: Number.isFinite(e) ? e : '',
+    });
+  }
+
+  rows.unshift({
+    leg_index: 'TOTAL',
+    from_name: '', to_name: '',
+    from_lat:'',from_lon:'',to_lat:'',to_lon:'',
+    leg_dist_km: sumD,
+    leg_time_min: sumT,
+    leg_energy_kj: sumE
+  });
+
+  return rows;
+}
+
+downloadViterbiChosenLegsCsv
+
+// ======================================================
+// ボタン onclick 登録（CSVダウンロード）
+// ======================================================
+(function registerAlgoDebugButtons(){
+  const btnBf = document.getElementById('btnDownloadBfLegsCsv');
+  if (btnBf) {
+    btnBf.onclick = downloadBruteforceLegsCsv;
+  }
+
+  const btnVit = document.getElementById('btnDownloadVitLegsCsv');
+  if (btnVit) {
+    btnVit.onclick = downloadViterbiChosenLegsCsv;
+  }
+})();
+
 </script>
 </body>
 </html>
+
