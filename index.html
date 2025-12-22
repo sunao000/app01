@@ -2544,7 +2544,10 @@ function bindLinearButtonsOnce(){
 
 // 休憩トリガーごとに1地点ずつ選ぶ全組み合わせを列挙（上限あり）
 function enumerateCombinations(poiGroups, perGroupLimit = 3){
-  const groups = poiGroups.map(arr => (arr || []).slice(0, perGroupLimit));
+  const groups = poiGroups.map(arr => {
+  const g = (arr || []).slice(0, perGroupLimit);
+  return g.length ? [null, ...g] : [null];
+});
   const combos = [];
 
   function dfs(i, acc){
@@ -2704,6 +2707,15 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
   if (!combos.length){
     throw new Error('組み合わせ候補が作れませんでした。');
   }
+  console.log('[BF] poiLimit(UI)=', $('poiLimit')?.value);
+console.log('[BF] perGroupLimit=', perGroupLimit);
+console.log('[BF] group sizes(all)=', poiGroups.map(g => (g||[]).length));
+console.log('[BF] group sizes(used)=', poiGroups.map(g => (g||[]).slice(0, perGroupLimit).length));
+console.log('[BF] combos length=', combos.length);
+console.log('[BF] unique combo keys=',
+  new Set(combos.map(c => comboKeyFromPicksByTrigger(c))).size
+);
+
 
    const ideals = getIdealPerLegs();
   const idealDistPerLeg   = ideals.idealDistPerLeg;
@@ -4796,6 +4808,7 @@ function downloadViterbiChosenLegsCsv(){
 </script>
 </body>
 </html>
+
 
 
 
