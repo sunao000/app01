@@ -187,6 +187,9 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   <span id="viterbiEdgeStat" style="opacity:.8;"></span>
 </div>
 
+<div id="viterbiEdgesPanel" style="display:none; padding:8px; background:#fff; border:1px solid #ccc; margin:8px 0; max-height:220px; overflow:auto; white-space:pre;"></div>
+
+
 <pre id="viterbiEdgePanel" style="display:none;max-height:260px;overflow:auto;border:1px solid #ddd;padding:8px;background:#fafafa;"></pre>
 
 <label><input type="checkbox" id="dbg_beam" checked> ビーム</label>
@@ -2214,22 +2217,39 @@ function buildLinearAlgoRows(start, goal, groups, hardCap = 200000) {
 async function calcLegCostWithApi(from, to, profile){
   if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
 
-  // ★ログ用：開始時刻
   const t0 = performance.now();
 
-  // ★lat/lon と名前を正規化（start/goalには name が無いことがある）
   const fromLat = from.lat ?? from.latitude ?? from.y;
   const fromLon = from.lon ?? from.lng ?? from.longitude ?? from.x;
   const toLat   = to.lat   ?? to.latitude   ?? to.y;
   const toLon   = to.lon   ?? to.lng ?? to.longitude   ?? to.x;
 
-  const fromName = from.name || from.label || from.type || 'FROM';
-  const toName   = to.name   || to.label   || to.type   || 'TO';
+  // ★座標バリデーション（重要）
+  if (!Number.isFinite(fromLat) || !Number.isFinite(fromLon) ||
+      !Number.isFinite(toLat)   || !Number.isFinite(toLon)) {
+    const msg = `calcLegCostWithApi: lat/lon が不正 from(${fromLat},${fromLon}) to(${toLat},${toLon})`;
+    if (window.__collectViterbiEdges) {
+      window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
+      window.__viterbiAllEdgeRows.push({
+        fromName: 'INVALID', toName: 'INVALID',
+        fromLat, fromLon, toLat, toLon,
+        distKm:'', timeMin:'', energyKj:'',
+        profile,
+        ms: Math.round(performance.now() - t0),
+        ok:false,
+        errMsg: msg
+      });
+    }
+    throw new Error(msg);
+  }
 
-  const wps = [
-    { lat: fromLat, lon: fromLon },
-    { lat: toLat,   lon: toLon }
-  ];
+  const short = (lat,lon)=> `${Number(lat).toFixed(5)},${Number(lon).toFixed(5)}`;
+  const fromName = (from.name || from.label) ? (from.name || from.label)
+                : (from.type ? `${from.type}(${short(fromLat,fromLon)})` : `FROM(${short(fromLat,fromLon)})`);
+  const toName   = (to.name || to.label) ? (to.name || to.label)
+                : (to.type ? `${to.type}(${short(toLat,toLon)})` : `TO(${short(toLat,toLon)})`);
+
+  const wps = [ { lat: fromLat, lon: fromLon }, { lat: toLat, lon: toLon } ];
 
   try {
     const out = await routeLegStatsForWaypoints(wps, profile);
@@ -2238,19 +2258,15 @@ async function calcLegCostWithApi(from, to, profile){
     const distKm  = (Number(summary.distance) || 0) / 1000;
     const timeMin = (Number(summary.duration) || 0) / 60;
 
-    // ★ 2点でも energy 配列が複数要素/0要素になる可能性があるので sum を基本にする
     let energyKj = sumNums(out?.stats?.energy);
-
-    // ★ dp を壊さない：NaNやInfinityは0に倒す
     if (!Number.isFinite(energyKj)) energyKj = 0;
 
-    // ★ログ（Viterbi中だけ取りたいなら、あなたのON/OFFフラグを使う）
     if (window.__collectViterbiEdges) {
       window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
       window.__viterbiAllEdgeRows.push({
         fromName, toName,
         fromLat, fromLon, toLat, toLon,
-        distKm, timeMin, energyKJ: energyKj, // ←CSV側と合わせて energyKJ で統一
+        distKm, timeMin, energyKj,      // ★ここ統一！
         profile,
         ms: Math.round(performance.now() - t0),
         ok: true,
@@ -2261,21 +2277,18 @@ async function calcLegCostWithApi(from, to, profile){
     return { total: distKm, distKm, timeMin, energyKj };
 
   } catch (e) {
-
-    // ★失敗も記録しておくと「どの組が落ちてるか」分かる
     if (window.__collectViterbiEdges) {
       window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
       window.__viterbiAllEdgeRows.push({
         fromName, toName,
         fromLat, fromLon, toLat, toLon,
-        distKm: '', timeMin: '', energyKJ: '',
+        distKm: '', timeMin: '', energyKj: '', // ★ここも統一！
         profile,
         ms: Math.round(performance.now() - t0),
         ok: false,
         errMsg: String(e?.message || e)
       });
     }
-
     throw e;
   }
 }
@@ -4806,7 +4819,44 @@ function bindViterbiEdgeButtons(){
 // DOMができてから確実にbind
 document.addEventListener('DOMContentLoaded', bindViterbiEdgeButtons);
 
+
+function renderViterbiEdgesPanel(show){
+  const el = document.getElementById('viterbiEdgesPanel');
+  if (!el) return;
+
+  if (!show){
+    el.style.display = 'none';
+    return;
+  }
+
+  el.style.display = 'block';
+
+  const rows = window.__viterbiAllEdgeRows || [];
+  if (!rows.length){
+    el.textContent = '（まだViterbiエッジが収集されていません。Viterbiを実行してください）';
+    return;
+  }
+
+  // 見やすいように上位だけ表示（全部表示したいなら slice を外す）
+  const head = rows.slice(0, 200);
+
+  const lines = [];
+  lines.push(`Viterbi edges: ${rows.length}件（先頭200件表示）`);
+  lines.push('from -> to | dist_km | time_min | energy_kj');
+  lines.push('------------------------------------------------');
+
+  for (const r of head){
+    lines.push(
+      `${r.fromName ?? 'from'} -> ${r.toName ?? 'to'} | ` +
+      `${(r.distKm ?? '').toString()} | ${(r.timeMin ?? '').toString()} | ${(r.energyKj ?? '').toString()}`
+    );
+  }
+
+  el.textContent = lines.join('\n');
+}
+
 </script>
 </body>
 </html>
+
 
