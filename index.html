@@ -4679,20 +4679,22 @@ function buildBruteforceLegRows(bfList){
     const comboRank = comboIdx + 1;
 
     const wps  = Array.isArray(r.wps) ? r.wps : [];
-    const dist = r.stats?.dist   || [];
-    const time = r.stats?.time   || [];
-    const ene  = r.stats?.energy || [];
+    const dist = Array.isArray(r.stats?.dist)   ? r.stats.dist   : [];
+    const time = Array.isArray(r.stats?.time)   ? r.stats.time   : [];
+    const ene  = Array.isArray(r.stats?.energy) ? r.stats.energy : [];
 
     const totalDistKm   = sumNums(dist);
     const totalTimeMin  = sumNums(time);
     const totalEnergyKJ = sumNums(ene);
 
-    const poiNames = (r.picksByTrigger || [])
+    const picksByTrigger = Array.isArray(r.picksByTrigger) ? r.picksByTrigger : [];
+    const poiNames = picksByTrigger
       .filter(Boolean)
-      .map(p=>p.name || 'POI')
+      .map(p => p.name || 'POI')
       .join(' -> ');
 
-    const nLeg = Math.max(dist.length, time.length, ene.length);
+    // ★ここが修正点：leg数は waypoint 列で決める（最重要）
+    const nLeg = Math.max(0, wps.length - 1);
 
     for (let i=0; i<nLeg; i++){
       const from = wps[i]   || null;
@@ -4701,7 +4703,7 @@ function buildBruteforceLegRows(bfList){
       rows.push({
         combo_rank: comboRank,
         combo_score: r.score ?? '',
-        bf_key: comboKeyFromPicksByTrigger(r.picksByTrigger, 6),
+        bf_key: comboKeyFromPicksByTrigger(picksByTrigger, 6),
 
         total_dist_km: totalDistKm,
         total_time_min: totalTimeMin,
@@ -4716,6 +4718,7 @@ function buildBruteforceLegRows(bfList){
         to_lat:    to?.lat ?? '',
         to_lon:    to?.lon ?? '',
 
+        // stats配列がleg単位なら入る。違うなら '' になるだけ（崩れない）
         leg_dist_km: dist[i] ?? '',
         leg_time_min: time[i] ?? '',
         leg_energy_kj: ene[i] ?? '',
@@ -4768,22 +4771,6 @@ async function buildChosenLegsRows(start, goal, picks, profile){
   return rows;
 }
 
-// ======================================================
-// ボタン onclick 登録（CSVダウンロード）
-// ======================================================
-(function registerAlgoDebugButtons(){
-  const btnBf = document.getElementById('btnDownloadBfLegsCsv');
-  if (btnBf) {
-    btnBf.onclick = downloadBruteforceLegsCsv;
-  }
-
-  const btnVit = document.getElementById('btnDownloadVitLegsCsv');
-  if (btnVit) {
-    btnVit.onclick = downloadViterbiChosenLegsCsv;
-  }
-})();
-
-
 function downloadViterbiChosenLegsCsv(){
   const rows = window.__viterbiChosenLegRows || [];
   if (!rows.length){
@@ -4808,10 +4795,33 @@ function downloadViterbiChosenLegsCsv(){
   downloadBlob(blob, 'viterbi_chosen_leg_details.csv');
 }
 
+// ======================================================
+// ボタン onclick 登録（CSVダウンロード）
+// ======================================================
+document.addEventListener('DOMContentLoaded', () => {
+  const btnBf = document.getElementById('btnDownloadBfLegsCsv');
+  if (btnBf) {
+    btnBf.addEventListener('click', (e) => {
+      e.preventDefault();
+      console.log('CLICK bf');
+      downloadBruteforceLegsCsv();
+    });
+  }
 
+  const btnVit = document.getElementById('btnDownloadVitLegsCsv');
+  if (btnVit) {
+    btnVit.addEventListener('click', async (e) => {
+      e.preventDefault();
+      console.log('CLICK vit');
+      await downloadViterbiChosenLegsCsv();
+    });
+  }
+});
+  
 </script>
 </body>
 </html>
+
 
 
 
