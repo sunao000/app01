@@ -50,7 +50,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   <summary>休憩地点まわりのPOI</summary>
   <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
     <label><input type="checkbox" id="poiToggle" checked> POI表示</label>
-    <label>初期半径 <input id="poiRadius" type="number" value="500" min="50" step="50"> m</label>
+    <label>初期半径 <input id="poiRadius" type="number" value="50000" min="50" step="50"> m</label>
     <label>件数上限（近い順） <input id="poiLimit" type="number" value="5" min="1" step="1"> 件</label>
     <label><input type="checkbox" id="chkConvenience" checked> コンビニ</label>
     <label><input type="checkbox" id="chkSuper" checked> スーパー</label>
@@ -180,12 +180,14 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   </details>
 </div>
 
-<button id="btnDownloadBfLegsCsv">総当たり：レグ明細CSV</button>
-<button id="btnDownloadVitLegsCsv">Viterbi：採用経路レグ明細CSV</button>
+<div id="viterbiEdgeTools" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;">
+  <button id="btnShowViterbiEdges">Viterbiエッジ表示</button>
+  <button id="btnHideViterbiEdges">Viterbiエッジ非表示</button>
+  <button id="btnDlViterbiEdgesCsv">ViterbiエッジCSV(Excel)DL</button>
+  <span id="viterbiEdgeStat" style="opacity:.8;"></span>
+</div>
 
-<button id="btnDownloadVitAllEdgesCsv" disabled>
-  Viterbi：全POI間（DP評価エッジ）CSV
-</button>
+<pre id="viterbiEdgePanel" style="display:none;max-height:260px;overflow:auto;border:1px solid #ddd;padding:8px;background:#fafafa;"></pre>
 
 <label><input type="checkbox" id="dbg_beam" checked> ビーム</label>
 <label><input type="checkbox" id="dbg_bf" checked> 総当たり</label>
@@ -222,8 +224,8 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 
 <script>
 /* ====== 設定 ====== */
-const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
-// const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
+// const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
+const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
 const ORS_ROOT = 'https://api.openrouteservice.org';
 
 /* ====== ヘルパ ====== */
@@ -1177,7 +1179,7 @@ tEnd(tkRest, `hits=${rests.length}`);
 
       // POI検索（半径固定・近い順に n 件）
 if ($('poiToggle').checked) {
-  const baseRadius = Number($('poiRadius').value) || 500;
+  const baseRadius = Number($('poiRadius').value) || 50000;
   const limit = Math.max(1, Number($('poiLimit').value) || 5);
   // ★ ここで今回の休憩場所検索開始時点のカウントを記録
   const overpassBefore = OVERPASS_CALL_TOTAL;
@@ -2212,24 +2214,70 @@ function buildLinearAlgoRows(start, goal, groups, hardCap = 200000) {
 async function calcLegCostWithApi(from, to, profile){
   if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
 
+  // ★ログ用：開始時刻
+  const t0 = performance.now();
+
+  // ★lat/lon と名前を正規化（start/goalには name が無いことがある）
+  const fromLat = from.lat ?? from.latitude ?? from.y;
+  const fromLon = from.lon ?? from.lng ?? from.longitude ?? from.x;
+  const toLat   = to.lat   ?? to.latitude   ?? to.y;
+  const toLon   = to.lon   ?? to.lng ?? to.longitude   ?? to.x;
+
+  const fromName = from.name || from.label || from.type || 'FROM';
+  const toName   = to.name   || to.label   || to.type   || 'TO';
+
   const wps = [
-    { lat: from.lat ?? from.latitude ?? from.y, lon: from.lon ?? from.lng ?? from.longitude ?? from.x },
-    { lat: to.lat   ?? to.latitude   ?? to.y, lon: to.lon   ?? to.lng ?? to.longitude   ?? to.x }
+    { lat: fromLat, lon: fromLon },
+    { lat: toLat,   lon: toLon }
   ];
 
-  const out = await routeLegStatsForWaypoints(wps, profile);
-  const summary = out?.feature?.properties?.summary || {};
+  try {
+    const out = await routeLegStatsForWaypoints(wps, profile);
+    const summary = out?.feature?.properties?.summary || {};
 
-  const distKm  = (Number(summary.distance) || 0) / 1000;
-  const timeMin = (Number(summary.duration) || 0) / 60;
+    const distKm  = (Number(summary.distance) || 0) / 1000;
+    const timeMin = (Number(summary.duration) || 0) / 60;
 
-  // ★ 2点でも energy 配列が複数要素/0要素になる可能性があるので sum を基本にする
-  let energyKj = sumNums(out?.stats?.energy);
+    // ★ 2点でも energy 配列が複数要素/0要素になる可能性があるので sum を基本にする
+    let energyKj = sumNums(out?.stats?.energy);
 
-  // ★ dp を壊さない：NaNやInfinityは0に倒す（または距離から近似でもOK）
-  if (!Number.isFinite(energyKj)) energyKj = 0;
+    // ★ dp を壊さない：NaNやInfinityは0に倒す
+    if (!Number.isFinite(energyKj)) energyKj = 0;
 
-  return { total: distKm, distKm, timeMin, energyKj };
+    // ★ログ（Viterbi中だけ取りたいなら、あなたのON/OFFフラグを使う）
+    if (window.__collectViterbiEdges) {
+      window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
+      window.__viterbiAllEdgeRows.push({
+        fromName, toName,
+        fromLat, fromLon, toLat, toLon,
+        distKm, timeMin, energyKJ: energyKj, // ←CSV側と合わせて energyKJ で統一
+        profile,
+        ms: Math.round(performance.now() - t0),
+        ok: true,
+        errMsg: ''
+      });
+    }
+
+    return { total: distKm, distKm, timeMin, energyKj };
+
+  } catch (e) {
+
+    // ★失敗も記録しておくと「どの組が落ちてるか」分かる
+    if (window.__collectViterbiEdges) {
+      window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
+      window.__viterbiAllEdgeRows.push({
+        fromName, toName,
+        fromLat, fromLon, toLat, toLon,
+        distKm: '', timeMin: '', energyKJ: '',
+        profile,
+        ms: Math.round(performance.now() - t0),
+        ok: false,
+        errMsg: String(e?.message || e)
+      });
+    }
+
+    throw e;
+  }
 }
 
 // Viterbi（API利用版）
@@ -2265,9 +2313,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     // start → 最初のトリガー
   for (let k = 0; k < Klist[0]; k++) {
     const poi = restGroups[0][k];
-   const leg = await calcLegCostWithApiCached_VitDebug(start, poi, profile, {
-  phase: 'start->0', t_from: -1, t_to: 0, i: -1, j: k
-});
+    const leg = await calcLegCostWithApi(start, poi, profile);
 
     const mse = legMseCost(
       leg.distKm,
@@ -2295,13 +2341,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
         const fromPoi = prevGroup[i];
         if (!Number.isFinite(dp[t - 1][i])) continue;
 
-        const leg = await calcLegCostWithApiCached_VitDebug(fromPoi, toPoi, profile, {
-  phase: 'dp',
-  t_from: t - 1,
-  t_to: t,
-  i,
-  j
-});
+        const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
 
         const mse = legMseCost(
           leg.distKm,
@@ -2334,13 +2374,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     if (!Number.isFinite(dp[lastT][k])) continue;
 
     const poi = restGroups[lastT][k];
-    const leg = await calcLegCostWithApiCached_VitDebug(poi, goal, profile, {
-  phase: 'last->goal',
-  t_from: lastT,
-  t_to: T,
-  i: k,
-  j: -1
-});
+    const leg = await calcLegCostWithApi(poi, goal, profile);
 
     const mse = legMseCost(
       leg.distKm,
@@ -2562,10 +2596,7 @@ function bindLinearButtonsOnce(){
 
 // 休憩トリガーごとに1地点ずつ選ぶ全組み合わせを列挙（上限あり）
 function enumerateCombinations(poiGroups, perGroupLimit = 3){
-  const groups = poiGroups.map(arr => {
-  const g = (arr || []).slice(0, perGroupLimit);
-  return g.length ? [null, ...g] : [null];
-});
+  const groups = poiGroups.map(arr => (arr || []).slice(0, perGroupLimit));
   const combos = [];
 
   function dfs(i, acc){
@@ -2725,15 +2756,6 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
   if (!combos.length){
     throw new Error('組み合わせ候補が作れませんでした。');
   }
-  console.log('[BF] poiLimit(UI)=', $('poiLimit')?.value);
-console.log('[BF] perGroupLimit=', perGroupLimit);
-console.log('[BF] group sizes(all)=', poiGroups.map(g => (g||[]).length));
-console.log('[BF] group sizes(used)=', poiGroups.map(g => (g||[]).slice(0, perGroupLimit).length));
-console.log('[BF] combos length=', combos.length);
-console.log('[BF] unique combo keys=',
-  new Set(combos.map(c => comboKeyFromPicksByTrigger(c))).size
-);
-
 
    const ideals = getIdealPerLegs();
   const idealDistPerLeg   = ideals.idealDistPerLeg;
@@ -2776,15 +2798,14 @@ const score    = eScore;
 const rawScore = eScore;
 
 
-results.push({
-  score,
-  rawScore,
-  feature,
-  wps,                 // ★追加：start→...→goal の waypoint 列
-  picks,
-  picksByTrigger: cmb,
-  stats
-});
+      results.push({
+        score,           // MSEスコア（小さいほど「理想ペースに近い」）
+        rawScore,        // 今は score と同じ（CSVなどで使いやすいよう一応残す）
+        feature,         // ORS の GeoJSON Feature
+        picks,           // 実際に経由した POI の配列
+        picksByTrigger: cmb, // トリガーごとの採用状況（null を含み得る）
+        stats            // {dist:[], time:[], energy:[]} 区間ごとの値
+      });
       okCount++;
     } catch (e){
       console.warn('runBruteforceOnce: combo route fail', e);
@@ -2800,11 +2821,7 @@ results.push({
     ' fail=', failCount,
     ' results=', results.length
   );
-console.log('[bfList length]', results.length);
-console.log('[bfList first/last same?]', results[0] === results[results.length-1]);
-console.log('[bfList unique keys]',
-  new Set(results.map(r => comboKeyFromPicksByTrigger(r.picksByTrigger))).size
-);
+
   return results;
 }
 
@@ -2861,30 +2878,6 @@ async function runAlgoCompareDebug(){
 
         const t0 = performance.now();
         bfList = await runBruteforceOnce(start, goal, restGroups, profile);
-        // ★dedupe後に score 昇順で並べ直す（rankの整合性を保つ）
-bfList.sort((a,b)=>{
-  const sa = Number.isFinite(a?.score) ? a.score : Infinity;
-  const sb = Number.isFinite(b?.score) ? b.score : Infinity;
-  return sa - sb;
-});
-        // ★追加：bf_keyで重複除外（picksByTriggerの座標列）
-{
-  const before = bfList.length;
-  const uniq = new Map();
-  for (const r of bfList){
-    const key = wpsKeyFromWps(r.wps, 6); // ★ORS入力(wps)で重複判定する
-    if (!uniq.has(key)) uniq.set(key, r);
-  }
-  bfList = Array.from(uniq.values());
-  console.log('[BF dedupe] before=', before, ' after=', bfList.length);
-}
-        // ★dedupe後に score 昇順で並べ直す
- bfList.sort((a,b)=>{
-   const sa = Number.isFinite(a?.score) ? a.score : Infinity;
-   const sb = Number.isFinite(b?.score) ? b.score : Infinity;
-   return sa - sb;
- });
-        
         const t1 = performance.now();
 
         const ms = t1 - t0;
@@ -2895,11 +2888,6 @@ bfList.sort((a,b)=>{
         panel.textContent += `ORS呼び出し: ${ors} 回\n`;
         panel.textContent += `Overpass呼び出し: ${ov} 回\n`;
         panel.textContent += `組合せ数: ${bfList.length} 件\n\n`;
-
-        // ★追加：総当たりのレグ明細を作って保持
-        window.__bfLegDetailRows = buildBruteforceLegRows(bfList);
-        const btnBf = document.getElementById('btnDownloadBfLegsCsv');
-        if (btnBf) btnBf.disabled = !(window.__bfLegDetailRows && window.__bfLegDetailRows.length);
 
         bfRankMap = buildBfRankMap(bfList);
         attachBfRank(bfList, bfRankMap);
@@ -2980,85 +2968,47 @@ bfList.sort((a,b)=>{
       }
     }
 
-// ----------------------------------------------------------
-// 4）Viterbi（API利用・DP：MSEのみ）
-// ----------------------------------------------------------
-if (isAlgoEnabled('dbg_vit')) {
-  panel.textContent += '\n--- Viterbi（API利用・DP：MSEのみ） ---\n';
+    // ----------------------------------------------------------
+    // 4）Viterbi（API利用・DP：MSEのみ）
+    // ----------------------------------------------------------
+    if (isAlgoEnabled('dbg_vit')) {
+      panel.textContent += '\n--- Viterbi（API利用・DP：MSEのみ） ---\n';
+      try {
+        const orsBefore = API_USED.orsTotal;
+        const ovpBefore = API_USED.overpassTotal;
 
-  // ★ここで必ず初期化（毎回リセット）
-  window.__viterbiAllEdgeRows = [];
-  window.__collectViterbiEdges = true;
+        const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
+        const vitGroups = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
 
-  const btnAll = document.getElementById('btnDownloadVitAllEdgesCsv');
-  if (btnAll) btnAll.disabled = true; // ★開始時はいったん無効化
+        if (!vitGroups || !vitGroups.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          const t0 = performance.now();
+          const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
+          const t1 = performance.now();
 
-  try {
-    const orsBefore = API_USED.orsTotal;
-    const ovpBefore = API_USED.overpassTotal;
+          const ms  = t1 - t0;
+          const ors = API_USED.orsTotal - orsBefore;
+          const ov  = API_USED.overpassTotal - ovpBefore;
 
-    const capPerTrigger = Math.max(1, Number($('poiLimit')?.value) || 5);
-    const vitGroups = makeCandGroupsFromRestGroups(restGroups, capPerTrigger);
+          if (!vitList || !vitList.length) {
+            panel.textContent += '(候補なし)\n';
+          } else {
+            attachBfRank(vitList, bfRankMap);
 
-    if (!vitGroups || !vitGroups.length) {
-      panel.textContent += '(候補なし)\n';
-      return;
+            panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+            panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+            panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+            showAlgoListInPanel(panel, vitList, 'viterbi');
+            pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
+          }
+        }
+      } catch (e) {
+        console.error('[viterbi] error', e);
+        panel.textContent += '\n[viterbi エラー] ' + (e.message || e) + '\n';
+      }
     }
-
-    const t0 = performance.now();
-    const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
-    const t1 = performance.now();
-
-    const ms  = t1 - t0;
-    const ors = API_USED.orsTotal - orsBefore;
-    const ov  = API_USED.overpassTotal - ovpBefore;
-
-    if (!vitList || !vitList.length) {
-      panel.textContent += '(候補なし)\n';
-      return;
-    }
-
-    attachBfRank(vitList, bfRankMap);
-
-    panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
-    panel.textContent += `ORS呼び出し: ${ors} 回\n`;
-    panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
-
-    // 採用経路（best 1本）のレグ明細
-    try {
-      const ideals = getIdealPerLegs();
-      const sortedVit = sortResultsByUnifiedScore(vitList, ideals.idealEnergyPerLeg);
-      const best = sortedVit[0];
-
-      window.__viterbiChosenLegRows = await buildChosenLegsRows(
-        start, goal, best.picks, profile
-      );
-
-      const btnVit = document.getElementById('btnDownloadVitLegsCsv');
-      if (btnVit) btnVit.disabled = !(window.__viterbiChosenLegRows && window.__viterbiChosenLegRows.length);
-    } catch (e2) {
-      console.warn('[viterbi] buildChosenLegsRows fail', e2);
-      window.__viterbiChosenLegRows = [];
-      const btnVit = document.getElementById('btnDownloadVitLegsCsv');
-      if (btnVit) btnVit.disabled = true;
-    }
-
-    showAlgoListInPanel(panel, vitList, 'viterbi');
-    pushAlgoResultsForCsv('viterbi','Viterbi（API・DP：MSEのみ）',vitList,ms,ors,ov);
-
-  } catch (e) {
-    console.error('[viterbi] error', e);
-    panel.textContent += '\n[viterbi エラー] ' + (e.message || e) + '\n';
-
-  } finally {
-    // ★ここが最重要：成功でも失敗でも必ず止める
-    window.__collectViterbiEdges = false;
-
-    // ★ボタン状態も最終的に必ず確定
-    const btnAll2 = document.getElementById('btnDownloadVitAllEdgesCsv');
-    if (btnAll2) btnAll2.disabled = !(window.__viterbiAllEdgeRows && window.__viterbiAllEdgeRows.length);
-  }
-}
 
     // ----------------------------------------------------------
     // 5）対策A：TopK増 + beamWidth増（再ランキング）
@@ -3667,35 +3617,6 @@ function downloadBruteforceCsv(){
 
   const blob = buildCsvBlob(header, bodyRows);
   downloadBlob(blob, 'bruteforce_all_combos.csv');
-}
-
-function downloadBruteforceLegsCsv(){
-  const rows = window.__bfLegDetailRows || [];
-  if (!rows.length){
-    alert('先に総当たり（dbg_bf）を実行してください');
-    return;
-  }
-
-  const header = [
-    'combo_rank','combo_score','bf_key',
-    'total_dist_km','total_time_min','total_energy_kj',
-    'poi_names',
-    'leg_index',
-    'from_name','to_name',
-    'from_lat','from_lon','to_lat','to_lon',
-    'leg_dist_km','leg_time_min','leg_energy_kj'
-  ];
-
-  const bodyRows = rows.map(r => header.map(h => {
-    const v = r[h];
-    if (['poi_names','from_name','to_name','bf_key'].includes(h)){
-      return `"${csvEscape(v ?? '')}"`;
-    }
-    return (v ?? '');
-  }));
-
-  const blob = buildCsvBlob(header, bodyRows);
-  downloadBlob(blob, 'bruteforce_leg_details.csv');
 }
 
 // トリガー ↔ POI のビームを全部消す
@@ -4641,12 +4562,7 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
       for (let i=0;i<Klist[t-1];i++){
         if (!Number.isFinite(dp[t-1][i])) continue;
         const fromPoi = restGroups[t-1][i];
-        const leg = await calcLegCostWithApiCached_VitDebug(fromPoi, toPoi, profile, {
-  phase: 'dp',
-  t_from: t-1,
-  t_to: t,
-  i, j
-});
+        const leg = await calcLegCostWithApiCached(fromPoi, toPoi, profile);
         const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
                                ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
         const cand = dp[t-1][i] + mse;
@@ -4739,238 +4655,118 @@ function applyAutoNamesToAllPois(){
   }
 }
 
-function buildBruteforceLegRows(bfList){
-  const rows = [];
-  (bfList || []).forEach((r, comboIdx)=>{
-    const comboRank = comboIdx + 1;
-
-    const wps  = Array.isArray(r.wps) ? r.wps : [];
-    const dist = Array.isArray(r.stats?.dist)   ? r.stats.dist   : [];
-    const time = Array.isArray(r.stats?.time)   ? r.stats.time   : [];
-    const ene  = Array.isArray(r.stats?.energy) ? r.stats.energy : [];
-
-    const totalDistKm   = sumNums(dist);
-    const totalTimeMin  = sumNums(time);
-    const totalEnergyKJ = sumNums(ene);
-
-    const picksByTrigger = Array.isArray(r.picksByTrigger) ? r.picksByTrigger : [];
-    const poiNames = picksByTrigger
-      .filter(Boolean)
-      .map(p => p.name || 'POI')
-      .join(' -> ');
-
-    // ★ここが修正点：leg数は waypoint 列で決める（最重要）
-    const nLeg = Math.max(0, wps.length - 1);
-
-    for (let i=0; i<nLeg; i++){
-      const from = wps[i]   || null;
-      const to   = wps[i+1] || null;
-
-      rows.push({
-        combo_rank: comboRank,
-        combo_score: r.score ?? '',
-        bf_key: comboKeyFromPicksByTrigger(picksByTrigger, 6),
-
-        total_dist_km: totalDistKm,
-        total_time_min: totalTimeMin,
-        total_energy_kj: totalEnergyKJ,
-        poi_names: poiNames,
-
-        leg_index: i+1,
-        from_name: from?.name || '',
-        to_name:   to?.name   || '',
-        from_lat:  from?.lat ?? '',
-        from_lon:  from?.lon ?? '',
-        to_lat:    to?.lat ?? '',
-        to_lon:    to?.lon ?? '',
-
-        // stats配列がleg単位なら入る。違うなら '' になるだけ（崩れない）
-        leg_dist_km: dist[i] ?? '',
-        leg_time_min: time[i] ?? '',
-        leg_energy_kj: ene[i] ?? '',
-      });
-    }
-  });
-  return rows;
+function formatNum(x, digits=3){
+  const n = Number(x);
+  if (!Number.isFinite(n)) return '';
+  return n.toFixed(digits);
 }
 
-async function buildChosenLegsRows(start, goal, picks, profile){
-  const pts = [start, ...(picks||[]), goal].map(p => ({
-    lat: p.lat, lon: p.lon, name: p.name || 'POI'
-  }));
+function renderViterbiEdgePanel(limit=400){
+  const pre = document.getElementById('viterbiEdgePanel');
+  const stat = document.getElementById('viterbiEdgeStat');
+  const rows = window.__viterbiAllEdgeRows || [];
 
-  const rows = [];
-  let sumD=0, sumT=0, sumE=0;
+  if (stat) stat.textContent = `件数: ${rows.length}`;
 
-  for (let i=0;i<pts.length-1;i++){
-    const leg = await calcLegCostWithApiCached(pts[i], pts[i+1], profile);
+  if (!pre) return;
 
-    const d = Number(leg.distKm ?? (leg.dist/1000));
-    const t = Number(leg.timeMin ?? (leg.time/60));
-    const e = Number(leg.energyKj ?? leg.energy);
-
-    if (Number.isFinite(d)) sumD += d;
-    if (Number.isFinite(t)) sumT += t;
-    if (Number.isFinite(e)) sumE += e;
-
-    rows.push({
-      leg_index: i+1,
-      from_name: pts[i].name,
-      to_name: pts[i+1].name,
-      from_lat: pts[i].lat, from_lon: pts[i].lon,
-      to_lat: pts[i+1].lat, to_lon: pts[i+1].lon,
-      leg_dist_km: Number.isFinite(d) ? d : '',
-      leg_time_min: Number.isFinite(t) ? t : '',
-      leg_energy_kj: Number.isFinite(e) ? e : '',
-    });
-  }
-
-  rows.unshift({
-    leg_index: 'TOTAL',
-    from_name: '', to_name: '',
-    from_lat:'',from_lon:'',to_lat:'',to_lon:'',
-    leg_dist_km: sumD,
-    leg_time_min: sumT,
-    leg_energy_kj: sumE
-  });
-
-  return rows;
-}
-
-function downloadViterbiChosenLegsCsv(){
-  const rows = window.__viterbiChosenLegRows || [];
   if (!rows.length){
-    alert('先にViterbi（dbg_vit）を実行してください');
+    pre.textContent = '(エッジログなし：Viterbi実行後に表示してください)';
     return;
   }
 
-  const header = [
-    'leg_index',
-    'from_name','to_name',
-    'from_lat','from_lon','to_lat','to_lon',
-    'leg_dist_km','leg_time_min','leg_energy_kj'
-  ];
+  // 見やすく先頭から limit 件だけ表示（必要なら変更）
+  const slice = rows.slice(0, limit);
 
-  const bodyRows = rows.map(r => header.map(h => {
-    const v = r[h];
-    if (['from_name','to_name'].includes(h)) return `"${csvEscape(v ?? '')}"`;
-    return (v ?? '');
-  }));
+  const lines = [];
+  lines.push('from\tto\tdist_km\ttime_min\tenergy_kJ\tprofile\tapi_ms\tcache\tstatus');
+  for (const r of slice){
+    lines.push([
+      r.fromName ?? '',
+      r.toName ?? '',
+      formatNum(r.distKm, 3),
+      formatNum(r.timeMin, 2),
+      formatNum(r.energyKJ, 2),
+      r.profile ?? '',
+      r.ms ?? '',
+      r.cacheHit ? 'HIT' : '',
+      r.ok ? 'OK' : 'ERR'
+    ].join('\t'));
+  }
+  if (rows.length > limit) lines.push(`... (表示は先頭${limit}件まで。全件はCSVで確認)`);
 
-  const blob = buildCsvBlob(header, bodyRows);
-  downloadBlob(blob, 'viterbi_chosen_leg_details.csv');
+  pre.textContent = lines.join('\n');
 }
 
-function downloadViterbiAllEdgesCsv(){
+function downloadViterbiEdgesCsv(){
   const rows = window.__viterbiAllEdgeRows || [];
   if (!rows.length){
-    alert('先にViterbi（dbg_vit）を実行してください');
+    alert('Viterbiのエッジログがありません。先にViterbiを実行してください。');
     return;
   }
 
+  const esc = s => String(s ?? '').replace(/"/g,'""');
+
   const header = [
-    'phase','t_from','t_to','i','j',
     'from_name','to_name',
     'from_lat','from_lon','to_lat','to_lon',
-    'dist_km','time_min','energy_kj',
-    'cache_hit','key'
+    'dist_km','time_min','energy_kJ',
+    'profile','api_ms','cache_hit','ok','error'
   ];
 
-  const bodyRows = rows.map(r => header.map(h => {
-    const v = r[h];
-    if (['phase','from_name','to_name','key'].includes(h)) return `"${csvEscape(v ?? '')}"`;
-    return (v ?? '');
-  }));
+  const lines = [];
+  lines.push(header.join(','));
 
-  const blob = buildCsvBlob(header, bodyRows);
-  downloadBlob(blob, 'viterbi_all_edges.csv');
-}
-
-function recordVitEdge(meta, from, to, profile, leg, cacheHit){
-  const f = normLL(from), t = normLL(to);
-  window.__viterbiAllEdgeRows.push({
-    phase: meta?.phase ?? '',         // 'start->0' / 'dp' / 'last->goal'
-    t_from: meta?.t_from ?? '',       // -1(start) / 0..T-1 / T(goal側)
-    t_to:   meta?.t_to   ?? '',
-    i: meta?.i ?? '',                 // from候補index（DPなら i）
-    j: meta?.j ?? '',                 // to候補index（DPなら j）
-    from_name: from?.name || 'POI',
-    to_name:   to?.name   || 'POI',
-    from_lat: f?.lat ?? '',
-    from_lon: f?.lon ?? '',
-    to_lat:   t?.lat ?? '',
-    to_lon:   t?.lon ?? '',
-    dist_km:   leg?.distKm ?? '',
-    time_min:  leg?.timeMin ?? '',
-    energy_kj: leg?.energyKj ?? '',
-    cache_hit: cacheHit ? 1 : 0,
-    key: legKey(from, to, profile, 6)
-  });
-}
-
-// ★ Viterbiデバッグ用：キャッシュ判定 + 記録つき
-async function calcLegCostWithApiCached_VitDebug(from, to, profile, meta){
-  const key = legKey(from, to, profile, 6);
-  const hit = __legCache.has(key);
-
-  const leg = hit ? __legCache.get(key)
-                  : await calcLegCostWithApi(from, to, profile);
-
-  if (!hit) __legCache.set(key, leg);
-
-  // 記録（Viterbi実行中だけ有効化する）
-  if (window.__collectViterbiEdges){
-    recordVitEdge(meta, from, to, profile, leg, hit);
-  }
-  return leg;
-}
-
-function wpsKeyFromWps(wps, decimals = 6){
-  const f = x => Number(x).toFixed(decimals);
-  return (wps||[]).map(p=>{
-    const lat = Number(p?.lat ?? p?.latitude);
-    const lon = Number(p?.lon ?? p?.lng ?? p?.longitude);
-    if(!Number.isFinite(lat) || !Number.isFinite(lon)) return 'bad';
-    return `${f(lat)},${f(lon)}`;
-  }).join('||');
-}
-
-// ======================================================
-// ボタン onclick 登録（CSVダウンロード）
-// ======================================================
-document.addEventListener('DOMContentLoaded', () => {
-  const btnBf = document.getElementById('btnDownloadBfLegsCsv');
-  if (btnBf) {
-    btnBf.addEventListener('click', (e) => {
-      e.preventDefault();
-      console.log('CLICK bf');
-      downloadBruteforceLegsCsv();
-    });
+  for (const r of rows){
+    lines.push([
+      `"${esc(r.fromName)}"`,
+      `"${esc(r.toName)}"`,
+      r.fromLat ?? '',
+      r.fromLon ?? '',
+      r.toLat ?? '',
+      r.toLon ?? '',
+      r.distKm ?? '',
+      r.timeMin ?? '',
+      r.energyKJ ?? '',
+      `"${esc(r.profile)}"`,
+      r.ms ?? '',
+      r.cacheHit ? 1 : 0,
+      r.ok ? 1 : 0,
+      `"${esc(r.errMsg)}"`
+    ].join(','));
   }
 
-  const btnVit = document.getElementById('btnDownloadVitLegsCsv');
-  if (btnVit) {
-    btnVit.addEventListener('click', async (e) => {
-      e.preventDefault();
-      console.log('CLICK vit');
-      await downloadViterbiChosenLegsCsv();
-    });
-  }
+  // Excel対策：UTF-8 BOM
+  const bom = new Uint8Array([0xEF,0xBB,0xBF]);
+  const blob = new Blob([bom, lines.join('\n')], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
 
-  // ★追加：Viterbi 全POI間（DP評価エッジ）CSV
-  const btnVitAll = document.getElementById('btnDownloadVitAllEdgesCsv');
-  if (btnVitAll) {
-    btnVitAll.addEventListener('click', (e) => {
-      e.preventDefault();
-      console.log('CLICK vit all edges');
-      downloadViterbiAllEdgesCsv();
-    });
-  }
-});
-  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `viterbi_edges_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function bindViterbiEdgeUi(){
+  const btnShow = document.getElementById('btnShowViterbiEdges');
+  const btnHide = document.getElementById('btnHideViterbiEdges');
+  const btnDl   = document.getElementById('btnDlViterbiEdgesCsv');
+  const pre     = document.getElementById('viterbiEdgePanel');
+
+  if (btnShow) btnShow.onclick = () => {
+    if (pre) pre.style.display = 'block';
+    renderViterbiEdgePanel();
+  };
+  if (btnHide) btnHide.onclick = () => {
+    if (pre) pre.style.display = 'none';
+  };
+  if (btnDl) btnDl.onclick = () => downloadViterbiEdgesCsv();
+}
+
+
 </script>
 </body>
 </html>
-
-
-
