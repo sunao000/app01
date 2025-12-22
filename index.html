@@ -2782,7 +2782,11 @@ results.push({
     ' fail=', failCount,
     ' results=', results.length
   );
-
+console.log('[bfList length]', results.length);
+console.log('[bfList first/last same?]', results[0] === results[results.length-1]);
+console.log('[bfList unique keys]',
+  new Set(results.map(r => comboKeyFromPicksByTrigger(r.picksByTrigger))).size
+);
   return results;
 }
 
@@ -4808,6 +4812,7 @@ function downloadViterbiChosenLegsCsv(){
 </script>
 </body>
 </html>
+
 
 
 
