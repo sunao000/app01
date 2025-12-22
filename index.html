@@ -50,7 +50,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   <summary>休憩地点まわりのPOI</summary>
   <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
     <label><input type="checkbox" id="poiToggle" checked> POI表示</label>
-    <label>初期半径 <input id="poiRadius" type="number" value="50000" min="50" step="50"> m</label>
+    <label>初期半径 <input id="poiRadius" type="number" value="500" min="50" step="50"> m</label>
     <label>件数上限（近い順） <input id="poiLimit" type="number" value="5" min="1" step="1"> 件</label>
     <label><input type="checkbox" id="chkConvenience" checked> コンビニ</label>
     <label><input type="checkbox" id="chkSuper" checked> スーパー</label>
@@ -1173,7 +1173,7 @@ tEnd(tkRest, `hits=${rests.length}`);
 
       // POI検索（半径固定・近い順に n 件）
 if ($('poiToggle').checked) {
-  const baseRadius = Number($('poiRadius').value) || 50000;
+  const baseRadius = Number($('poiRadius').value) || 500;
   const limit = Math.max(1, Number($('poiLimit').value) || 5);
   // ★ ここで今回の休憩場所検索開始時点のカウントを記録
   const overpassBefore = OVERPASS_CALL_TOTAL;
@@ -4772,4 +4772,5 @@ downloadViterbiChosenLegsCsv
 </script>
 </body>
 </html>
+
 
