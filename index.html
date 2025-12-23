@@ -2350,6 +2350,7 @@ const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
 
 const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
 dp[0][k] = mse;
+  }
 
     // t-1 → t
   for (let t = 1; t < T; t++) {
@@ -4865,6 +4866,7 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
 
