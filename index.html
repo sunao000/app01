@@ -2350,6 +2350,21 @@ const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
 
 const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
 dp[0][k] = mse;
+
+const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
+recordViterbiEdge({
+  edgeType: 'start->g0',
+  t: 0,
+  fromIdx: -1,
+  toIdx: k,
+  fromName: start.name || 'start',
+  toName: poi.name || `g0[${k}]`,
+  energyKj: leg.energyKj,
+  idealEnergyPerLeg,
+  deEnergyKj: de,        // 理想との差（符号付き）
+  absDeEnergyKj: Math.abs(de),
+  mseEnergy: mse
+});
   }
 
     // t-1 → t
@@ -2370,6 +2385,23 @@ dp[0][k] = mse;
         const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
 
 const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
+
+const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
+recordViterbiEdge({
+  edgeType: 'g(t-1)->g(t)',
+  t,
+  fromIdx: i,
+  toIdx: j,
+  fromName: fromPoi.name || `g${t-1}[${i}]`,
+  toName: toPoi.name || `g${t}[${j}]`,
+  energyKj: leg.energyKj,
+  idealEnergyPerLeg,
+  deEnergyKj: de,
+  absDeEnergyKj: Math.abs(de),
+  mseEnergy: mse,
+  prevDp: dp[t-1][i],     // あるとデバッグが楽
+  candDp: dp[t-1][i] + mse
+});
 
 const cand = dp[t - 1][i] + mse;
 
@@ -2396,6 +2428,23 @@ const cand = dp[t - 1][i] + mse;
     const leg = await calcLegCostWithApi(poi, goal, profile);
 
 const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
+
+const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
+recordViterbiEdge({
+  edgeType: 'gLast->goal',
+  t: lastT + 1,          // “区間番号”として見たいならこう
+  fromIdx: k,
+  toIdx: -1,
+  fromName: poi.name || `g${lastT}[${k}]`,
+  toName: goal.name || 'goal',
+  energyKj: leg.energyKj,
+  idealEnergyPerLeg,
+  deEnergyKj: de,
+  absDeEnergyKj: Math.abs(de),
+  mseEnergy: mse,
+  prevDp: dp[lastT][k],
+  candDp: dp[lastT][k] + mse
+});
 
 const cand = dp[lastT][k] + mse;
 
@@ -3848,6 +3897,12 @@ function legEnergyMseCost(energyKj, idealEnergyPerLeg){
   return de * de;
 }
 
+function recordViterbiEdge(row){
+  if (!window.__collectViterbiEdges) return;
+  window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
+  window.__viterbiAllEdgeRows.push(row);
+}
+
 function legEnergyL1Cost(energyKj, idealEnergyPerLeg){
   const e  = Number(energyKj);
   const ie = Number(idealEnergyPerLeg);
@@ -4839,6 +4894,7 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
 
