@@ -3697,14 +3697,8 @@ console.log('[autoBeamParams]', ap);
 
 
   // ideal 1 leg（既存と同じ）
-  const cumTotals = window.__cumTotals || {};
-  const totalDkm  = (Number(cumTotals.D) || 0) / 1000;
-  const totalTmin = (Number(cumTotals.T) || 0) / 60;
-  const totalEkJ  = Number(cumTotals.E)  || 0;
-  const R = T + 1;
-  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
-  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
-  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
+const ideals = getIdealPerLegs();
+const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
 
   // 事前チェック
   const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
@@ -3717,8 +3711,7 @@ console.log('[autoBeamParams]', ap);
   for (let k = 0; k < Klist[0]; k++){
     const poi = restGroups[0][k];
     const leg = await calcLegCostWithApi(start, poi, profile);
-    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
-                           idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
     beam.push({ cost: mse, idxes: [k], lastPoi: poi });
   }
   beam.sort((a,b)=>a.cost-b.cost);
@@ -3733,8 +3726,7 @@ console.log('[autoBeamParams]', ap);
       for (let j = 0; j < curGroup.length; j++){
         const toPoi = curGroup[j];
         const leg = await calcLegCostWithApi(st.lastPoi, toPoi, profile);
-        const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
-                               idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+        const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
         next.push({ cost: st.cost + mse, idxes: [...st.idxes, j], lastPoi: toPoi });
       }
     }
@@ -3746,8 +3738,7 @@ console.log('[autoBeamParams]', ap);
   const finals = [];
   for (const st of beam){
     const leg = await calcLegCostWithApi(st.lastPoi, goal, profile);
-    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
-                           idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
     finals.push({ cost: st.cost + mse, idxes: st.idxes });
   }
   finals.sort((a,b)=>a.cost-b.cost);
@@ -3856,20 +3847,20 @@ function legEnergyMseCost(energyKj, idealEnergyPerLeg){
   const de = e - ie;
   return de * de;
 }
+
+function legEnergyL1Cost(energyKj, idealEnergyPerLeg){
+  const e  = Number(energyKj);
+  const ie = Number(idealEnergyPerLeg);
+  if (!Number.isFinite(e) || !Number.isFinite(ie)) return Infinity;
+  return Math.abs(e - ie);
+}
   
 async function runViterbiOnce_API_L1(start, goal, restGroups, profile) {
   const T = Array.isArray(restGroups) ? restGroups.length : 0;
   if (T <= 0) return [];
 
-  const cumTotals = window.__cumTotals || {};
-  const totalDkm  = (Number(cumTotals.D) || 0) / 1000;
-  const totalTmin = (Number(cumTotals.T) || 0) / 60;
-  const totalEkJ  = Number(cumTotals.E)  || 0;
-
-  const R = T + 1;
-  const idealDistPerLeg   = R > 0 ? totalDkm  / R : 0;
-  const idealTimePerLeg   = R > 0 ? totalTmin / R : 0;
-  const idealEnergyPerLeg = R > 0 ? totalEkJ  / R : 0;
+  const ideals = getIdealPerLegs();
+const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
 
   const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
   if (Klist.some(k => k <= 0)) return [];
@@ -3884,8 +3875,7 @@ async function runViterbiOnce_API_L1(start, goal, restGroups, profile) {
   for (let k=0;k<Klist[0];k++){
     const poi = restGroups[0][k];
     const leg = await calcLegCostWithApi(start, poi, profile);
-    const c = legL1Cost(leg.distKm, leg.timeMin, leg.energyKj,
-                        idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    const c = legEnergyL1Cost(leg.energyKj, idealEnergyPerLeg);
     dp[0][k]=c;
   }
 
@@ -3899,8 +3889,7 @@ async function runViterbiOnce_API_L1(start, goal, restGroups, profile) {
         if (!Number.isFinite(dp[t-1][i])) continue;
         const fromPoi = restGroups[t-1][i];
         const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
-        const c = legL1Cost(leg.distKm, leg.timeMin, leg.energyKj,
-                            idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+        const c = legEnergyL1Cost(leg.energyKj, idealEnergyPerLeg);
         const cand = dp[t-1][i] + c;
         if (cand < best){ best=cand; bestIdx=i; }
       }
@@ -3916,8 +3905,7 @@ async function runViterbiOnce_API_L1(start, goal, restGroups, profile) {
     if (!Number.isFinite(dp[lastT][k])) continue;
     const poi = restGroups[lastT][k];
     const leg = await calcLegCostWithApi(poi, goal, profile);
-    const c = legL1Cost(leg.distKm, leg.timeMin, leg.energyKj,
-                        idealDistPerLeg, idealTimePerLeg, idealEnergyPerLeg);
+    const c = legEnergyL1Cost(leg.energyKj, idealEnergyPerLeg);
     const cand = dp[lastT][k] + c;
     if (cand < bestFinal){ bestFinal=cand; bestIdx=k; }
   }
@@ -4226,10 +4214,8 @@ async function runViterbiOnce_API_C(start, goal, restGroups, profile, opt = {}) 
   const T = Array.isArray(restGroups) ? restGroups.length : 0;
   if (!Number.isInteger(T) || T <= 0) return [];
 
-  const ideals = getIdealPerLegs();
-  const idealDistPerLeg   = ideals.idealDistPerLeg;
-  const idealTimePerLeg   = ideals.idealTimePerLeg;
-  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
+const ideals = getIdealPerLegs();
+const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
 
   const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
   if (Klist.some(k => !Number.isInteger(k) || k <= 0)) return [];
@@ -4261,18 +4247,7 @@ async function runViterbiOnce_API_C(start, goal, restGroups, profile, opt = {}) 
         if (!Number.isFinite(prevCost)) continue;
 
         const fromPoi = prevGroup[i];
-        const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
-
-        const mse = legMseCost(
-          leg.distKm,
-          leg.timeMin,
-          leg.energyKj,
-          idealDistPerLeg,
-          idealTimePerLeg,
-          idealEnergyPerLeg
-        );
-
-        const cand = prevCost + mse;
+        const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
         if (cand < bestCost) {
           bestCost = cand;
           bestIdx  = i;
@@ -4556,6 +4531,7 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
   if (T <= 0) return [];
 
   const ideals = getIdealPerLegs();
+  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
   const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
   if (Klist.some(k => k <= 0)) return [];
 
@@ -4569,8 +4545,7 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
   for (let k=0;k<Klist[0];k++){
     const poi = restGroups[0][k];
     const leg = await calcLegCostWithApiCached(start, poi, profile);
-    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
-                           ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
+    const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
     dp[0][k]=mse;
   }
 
@@ -4584,8 +4559,7 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
         if (!Number.isFinite(dp[t-1][i])) continue;
         const fromPoi = restGroups[t-1][i];
         const leg = await calcLegCostWithApiCached(fromPoi, toPoi, profile);
-        const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
-                               ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
+        const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
         const cand = dp[t-1][i] + mse;
         if (cand < best){ best=cand; bestIdx=i; }
       }
@@ -4601,8 +4575,7 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
     if (!Number.isFinite(dp[lastT][k])) continue;
     const poi = restGroups[lastT][k];
     const leg = await calcLegCostWithApiCached(poi, goal, profile);
-    const mse = legMseCost(leg.distKm, leg.timeMin, leg.energyKj,
-                           ideals.idealDistPerLeg, ideals.idealTimePerLeg, ideals.idealEnergyPerLeg);
+    const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
     const cand = dp[lastT][k] + mse;
     if (cand < bestFinal){ bestFinal=cand; bestIdx=k; }
   }
@@ -4626,7 +4599,7 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
   }catch(e){}
 
   return [{
-    score: finalScoreFromStats(stats, { idealEnergyPerLeg: ideals.idealEnergyPerLeg }),
+    score: finalScoreFromStats(stats, { idealEnergyPerLeg }),
     rawScore: bestFinal,
     feature,
     stats,
@@ -4866,6 +4839,7 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
 
