@@ -2327,10 +2327,8 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     return [];
   }
 
-  const ideals = getIdealPerLegs();
-  const idealDistPerLeg   = ideals.idealDistPerLeg;
-  const idealTimePerLeg   = ideals.idealTimePerLeg;
-  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
+const ideals = getIdealPerLegs();
+const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
 
   const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
   if (Klist.some(k => !Number.isInteger(k) || k <= 0)) {
@@ -2350,16 +2348,8 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     const poi = restGroups[0][k];
     const leg = await calcLegCostWithApi(start, poi, profile);
 
-    const mse = legMseCost(
-      leg.distKm,
-      leg.timeMin,
-      leg.energyKj,
-      idealDistPerLeg,
-      idealTimePerLeg,
-      idealEnergyPerLeg
-    );
-    dp[0][k] = mse;
-  }
+const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
+dp[0][k] = mse;
 
     // t-1 → t
   for (let t = 1; t < T; t++) {
@@ -2378,14 +2368,9 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
 
         const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
 
-        const mse = legMseCost(
-          leg.distKm,
-          leg.timeMin,
-          leg.energyKj,
-          idealDistPerLeg,
-          idealTimePerLeg,
-          idealEnergyPerLeg
-        );
+const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
+
+const cand = dp[t - 1][i] + mse;
 
         const cand = dp[t - 1][i] + mse;
 
@@ -2411,16 +2396,9 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     const poi = restGroups[lastT][k];
     const leg = await calcLegCostWithApi(poi, goal, profile);
 
-    const mse = legMseCost(
-      leg.distKm,
-      leg.timeMin,
-      leg.energyKj,
-      idealDistPerLeg,
-      idealTimePerLeg,
-      idealEnergyPerLeg
-    );
+const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
 
-    const cand = dp[lastT][k] + mse;
+const cand = dp[lastT][k] + mse;
 
     if (cand < bestFinalCost) {
       bestFinalCost = cand;
@@ -3870,6 +3848,15 @@ async function runViterbiTopK_Rerank_API(start, goal, restGroups, profile, opt =
 function legL1Cost(d, t, e, ideald, idealt, ideale){
   return Math.abs(d-ideald) + Math.abs(t-idealt) + Math.abs(e-ideale);
 }
+
+// ★追加：Viterbi(DP)の区間コストを「エネルギーのみ(MSE)」にする
+function legEnergyMseCost(energyKj, idealEnergyPerLeg){
+  const e  = Number(energyKj);
+  const ie = Number(idealEnergyPerLeg);
+  if (!Number.isFinite(e) || !Number.isFinite(ie)) return Infinity;
+  const de = e - ie;
+  return de * de;
+}
   
 async function runViterbiOnce_API_L1(start, goal, restGroups, profile) {
   const T = Array.isArray(restGroups) ? restGroups.length : 0;
@@ -4880,6 +4867,7 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
 
