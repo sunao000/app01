@@ -2353,15 +2353,18 @@ dp[0][k] = mse;
 
 const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
 recordViterbiEdge({
-  edgeType: 'start->g0',
   t: 0,
   fromIdx: -1,
   toIdx: k,
   fromName: start.name || 'start',
   toName: poi.name || `g0[${k}]`,
+  fromLat: start.lat, fromLon: start.lon,
+  toLat: poi.lat,     toLon: poi.lon,
+  distKm: leg.distKm,
+  timeMin: leg.timeMin,
   energyKj: leg.energyKj,
   idealEnergyPerLeg,
-  deEnergyKj: de,        // 理想との差（符号付き）
+  deEnergyKj: de,
   absDeEnergyKj: Math.abs(de),
   mseEnergy: mse
 });
@@ -2388,18 +2391,21 @@ const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
 
 const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
 recordViterbiEdge({
-  edgeType: 'g(t-1)->g(t)',
   t,
   fromIdx: i,
   toIdx: j,
   fromName: fromPoi.name || `g${t-1}[${i}]`,
   toName: toPoi.name || `g${t}[${j}]`,
+  fromLat: fromPoi.lat, fromLon: fromPoi.lon,
+  toLat: toPoi.lat,     toLon: toPoi.lon,
+  distKm: leg.distKm,
+  timeMin: leg.timeMin,
   energyKj: leg.energyKj,
   idealEnergyPerLeg,
   deEnergyKj: de,
   absDeEnergyKj: Math.abs(de),
   mseEnergy: mse,
-  prevDp: dp[t-1][i],     // あるとデバッグが楽
+  prevDp: dp[t-1][i],
   candDp: dp[t-1][i] + mse
 });
 
@@ -2431,12 +2437,15 @@ const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
 
 const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
 recordViterbiEdge({
-  edgeType: 'gLast->goal',
-  t: lastT + 1,          // “区間番号”として見たいならこう
+  t: lastT + 1,
   fromIdx: k,
   toIdx: -1,
   fromName: poi.name || `g${lastT}[${k}]`,
   toName: goal.name || 'goal',
+  fromLat: poi.lat,  fromLon: poi.lon,
+  toLat: goal.lat,   toLon: goal.lon,
+  distKm: leg.distKm,
+  timeMin: leg.timeMin,
   energyKj: leg.energyKj,
   idealEnergyPerLeg,
   deEnergyKj: de,
@@ -4968,5 +4977,6 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
