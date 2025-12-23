@@ -4756,33 +4756,55 @@ function downloadViterbiEdgesCsv(){
 
   const esc = s => String(s ?? '').replace(/"/g,'""');
 
-  const header = [
-    'from_name','to_name',
-    'from_lat','from_lon','to_lat','to_lon',
-    'dist_km','time_min','energy_kJ',
-    'profile','api_ms','cache_hit','ok','error'
-  ];
+const header = [
+  'edge_type',              // ★ どの区間か
+  't',                      // ★ トリガー段
+  'from_idx','to_idx',      // ★ DP上のインデックス
+
+  'from_name','to_name',
+  'from_lat','from_lon','to_lat','to_lon',
+
+  'energy_kJ',              // 実測
+  'ideal_energy_kJ',        // ★ 理想
+  'delta_energy_kJ',        // ★ 差（energy - ideal）
+  'abs_delta_energy_kJ',    // ★ |差|
+  'mse_energy',             // ★ (差)^2
+
+  'dist_km','time_min',
+  'profile','api_ms','cache_hit','ok','error'
+];
 
   const lines = [];
   lines.push(header.join(','));
 
   for (const r of rows){
-    lines.push([
-      `"${esc(r.fromName)}"`,
-      `"${esc(r.toName)}"`,
-      r.fromLat ?? '',
-      r.fromLon ?? '',
-      r.toLat ?? '',
-      r.toLon ?? '',
-      r.distKm ?? '',
-      r.timeMin ?? '',
-      r.energyKj ?? '',
-      `"${esc(r.profile)}"`,
-      r.ms ?? '',
-      r.cacheHit ? 1 : 0,
-      r.ok ? 1 : 0,
-      `"${esc(r.errMsg)}"`
-    ].join(','));
+lines.push([
+  r.edgeType ?? '',          // ★
+  r.t ?? '',                 // ★
+  r.fromIdx ?? '',           // ★
+  r.toIdx ?? '',             // ★
+
+  `"${esc(r.fromName)}"`,
+  `"${esc(r.toName)}"`,
+  r.fromLat ?? '',
+  r.fromLon ?? '',
+  r.toLat ?? '',
+  r.toLon ?? '',
+
+  r.energyKj ?? '',
+  r.idealEnergyPerLeg ?? '', // ★
+  r.deEnergyKj ?? '',        // ★
+  r.absDeEnergyKj ?? '',     // ★
+  r.mseEnergy ?? '',         // ★
+
+  r.distKm ?? '',
+  r.timeMin ?? '',
+  `"${esc(r.profile)}"`,
+  r.ms ?? '',
+  r.cacheHit ? 1 : 0,
+  r.ok ? 1 : 0,
+  `"${esc(r.errMsg)}"`
+].join(','));
   }
 
   // Excel対策：UTF-8 BOM
@@ -4894,6 +4916,7 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
 
