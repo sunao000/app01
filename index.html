@@ -2372,8 +2372,6 @@ const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
 
 const cand = dp[t - 1][i] + mse;
 
-        const cand = dp[t - 1][i] + mse;
-
         if (cand < bestCost) {
           bestCost = cand;
           bestIdx  = i;
@@ -4867,6 +4865,7 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
+
 
 
 
