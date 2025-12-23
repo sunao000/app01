@@ -2939,6 +2939,11 @@ async function runAlgoCompareDebug(){
 
         const t0 = performance.now();
         bfList = await runBruteforceOnce(start, goal, restGroups, profile);
+        // ★集約ログ開始
+        window.__viterbiEdgeAgg = new Map();
+        window.__viterbiAllEdgeRows = [];          // 出力用（後で入れる）
+        window.__collectViterbiEdges = true;
+
         const t1 = performance.now();
 
         const ms = t1 - t0;
@@ -3046,6 +3051,29 @@ async function runAlgoCompareDebug(){
         } else {
           const t0 = performance.now();
           const vitList = await runViterbiOnce_API(start, goal, vitGroups, profile);
+          // ★集約ログ停止
+window.__collectViterbiEdges = false;
+
+// ★Map → rows（平均値で1行化）に変換して window.__viterbiAllEdgeRows に確定
+window.__viterbiAllEdgeRows = Array.from(window.__viterbiEdgeAgg.values()).map(x=>{
+  const n = Math.max(1, x.count);
+  return {
+    fromIdx: x.fromIdx,
+    toIdx: x.toIdx,
+    fromName: x.fromName,
+    toName: x.toName,
+    fromLat: x.fromLat,
+    fromLon: x.fromLon,
+    toLat: x.toLat,
+    toLon: x.toLon,
+    count: x.count,
+    energyKj: x.sumEnergyKj / n,
+    distKm: x.sumDistKm / n,
+    timeMin: x.sumTimeMin / n,
+    cost: x.sumCost / n
+  };
+});
+
           const t1 = performance.now();
 
           const ms  = t1 - t0;
@@ -3899,8 +3927,51 @@ function legEnergyMseCost(energyKj, idealEnergyPerLeg){
 
 function recordViterbiEdge(row){
   if (!window.__collectViterbiEdges) return;
-  window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
-  window.__viterbiAllEdgeRows.push(row);
+
+  // 受け皿（集約Map）
+  if (!window.__viterbiEdgeAgg) window.__viterbiEdgeAgg = new Map();
+
+  // from/to の同一判定キー（同一組み合わせを1行化）
+  // start/goal は idx が -1 なので区別可能
+  const fromIdx = (row?.fromIdx ?? '');
+  const toIdx   = (row?.toIdx ?? '');
+  const fromName = row?.fromName ?? '';
+  const toName   = row?.toName ?? '';
+
+  const key = `${fromIdx}|${toIdx}|${fromName}|${toName}`;
+
+  const cur = window.__viterbiEdgeAgg.get(key) || {
+    fromIdx, toIdx,
+    fromName, toName,
+    fromLat: row?.fromLat ?? null,
+    fromLon: row?.fromLon ?? null,
+    toLat:   row?.toLat ?? null,
+    toLon:   row?.toLon ?? null,
+
+    count: 0,
+    sumEnergyKj: 0,
+    sumDistKm: 0,
+    sumTimeMin: 0,
+    sumCost: 0
+  };
+
+  cur.count += 1;
+
+  const e = Number(row?.energyKj);
+  if (Number.isFinite(e)) cur.sumEnergyKj += e;
+
+  const d = Number(row?.distKm);
+  if (Number.isFinite(d)) cur.sumDistKm += d;
+
+  const tm = Number(row?.timeMin);
+  if (Number.isFinite(tm)) cur.sumTimeMin += tm;
+
+  // costは「mseEnergy」など、あなたが使いたい代表値を入れる
+  // ここでは mseEnergy を cost として集約
+  const c = Number(row?.mseEnergy ?? row?.cost);
+  if (Number.isFinite(c)) cur.sumCost += c;
+
+  window.__viterbiEdgeAgg.set(key, cur);
 }
 
 function legEnergyL1Cost(energyKj, idealEnergyPerLeg){
@@ -4711,12 +4782,11 @@ function formatNum(x, digits=3){
 }
 
 function renderViterbiEdgePanel(limit=400){
-  const pre = document.getElementById('viterbiEdgePanel');
+  const pre  = document.getElementById('viterbiEdgePanel');
   const stat = document.getElementById('viterbiEdgeStat');
   const rows = window.__viterbiAllEdgeRows || [];
 
   if (stat) stat.textContent = `件数: ${rows.length}`;
-
   if (!pre) return;
 
   if (!rows.length){
@@ -4724,24 +4794,24 @@ function renderViterbiEdgePanel(limit=400){
     return;
   }
 
-  // 見やすく先頭から limit 件だけ表示（必要なら変更）
   const slice = rows.slice(0, limit);
 
   const lines = [];
-  lines.push('from\tto\tdist_km\ttime_min\tenergy_kJ\tprofile\tapi_ms\tcache\tstatus');
+  // ★ 集約向け：count/cost を出す
+  lines.push('from\tto\tcount\tdist_km\ttime_min\tenergy_kJ\tcost');
+
   for (const r of slice){
     lines.push([
       r.fromName ?? '',
       r.toName ?? '',
+      r.count ?? 1,
       formatNum(r.distKm, 3),
       formatNum(r.timeMin, 2),
       formatNum(r.energyKj, 2),
-      r.profile ?? '',
-      r.ms ?? '',
-      r.cacheHit ? 'HIT' : '',
-      r.ok ? 'OK' : 'ERR'
+      formatNum(r.cost, 3)
     ].join('\t'));
   }
+
   if (rows.length > limit) lines.push(`... (表示は先頭${limit}件まで。全件はCSVで確認)`);
 
   pre.textContent = lines.join('\n');
@@ -4772,26 +4842,22 @@ function downloadViterbiEdgesCsv(){
   lines.push(header.join(','));
 
   for (const r of rows){
-    lines.push([
-      r.from_idx ?? '',
-      r.to_idx ?? '',
-
-      `"${esc(r.from_name)}"`,
-      `"${esc(r.to_name)}"`,
-
-      r.from_lat ?? '',
-      r.from_lon ?? '',
-      r.to_lat ?? '',
-      r.to_lon ?? '',
-
-      r.count ?? 1,
-
-      r.energy_kj ?? '',
-      r.dist_km ?? '',
-      r.time_min ?? '',
-      r.cost ?? ''
-    ].join(','));
-  }
+  lines.push([
+    r.fromIdx ?? '',
+    r.toIdx ?? '',
+    `"${esc(r.fromName)}"`,
+    `"${esc(r.toName)}"`,
+    r.fromLat ?? '',
+    r.fromLon ?? '',
+    r.toLat ?? '',
+    r.toLon ?? '',
+    r.count ?? 1,
+    r.energyKj ?? '',
+    r.distKm ?? '',
+    r.timeMin ?? '',
+    r.cost ?? ''
+  ].join(','));
+}
 
   // Excel対策：UTF-8 BOM
   const bom = new Uint8Array([0xEF,0xBB,0xBF]);
@@ -4902,16 +4968,3 @@ function renderViterbiEdgesPanel(show){
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-
-
