@@ -120,6 +120,33 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   </details>
 </div>
 
+<div class="section" style="background:#f0f8ff;">
+  <details>
+    <summary>手動ルート比較（一括 vs 区間積上）</summary>
+    <div style="padding:8px; font-size:0.9rem;">
+      <p style="margin:0 0 8px 0;color:#666">各トリガーで経由するPOIを選んで描画します。</p>
+      
+      <button onclick="updateManualRouteUI()" style="margin-bottom:8px;font-size:12px;">🔄 リストが空の場合はここを押して更新</button>
+
+      <div id="manualRouteSelectors" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;">
+        (休憩場所検索を実行してください)
+      </div>
+
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+        <label style="color:#0055aa;font-weight:bold;">
+          <input type="checkbox" id="chkManBatch" checked> 一括 (API1回/青)
+        </label>
+        <label style="color:#aa0000;font-weight:bold;">
+          <input type="checkbox" id="chkManSeg" checked> 区間積上 (API複数回/赤)
+        </label>
+      </div>
+      
+      <button id="btnDrawManualRoute" onclick="drawManualComparison()" style="width:100%;padding:6px;">選択したPOIで比較描画</button>
+      <div id="manualRouteInfo" style="margin-top:6px;font-size:0.85rem;white-space:pre-wrap;"></div>
+    </div>
+  </details>
+</div>
+
 <!-- 休憩トリガー別の候補POI -->
 <div class="section">
   <details open>
@@ -201,6 +228,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 <label><input type="checkbox" id="dbg_D" checked> 対策D</label>
 <label><input type="checkbox" id="dbg_E" checked> 対策E</label>
 <label><input type="checkbox" id="dbg_F" checked> 対策F</label>
+<label><input type="checkbox" id="dbg_G" checked> 対策G</label>
 
 <label style="display:inline-flex;align-items:center;gap:6px">
   A/B beamWidth
@@ -1042,25 +1070,65 @@ async function nomSearch(q){
 
 
 /* ====== ORS ====== */
-async function post(url,body){
-  const r=await fetch(url,{
-    method:'POST',
-    headers:{'Content-Type':'application/json','Authorization':ORS_KEY},
-    body:JSON.stringify(body)
-  });
-  if(!r.ok) throw new Error(r.status);
-  return r.json();
-}
-async function dir(body,profile){
-  const wait=1100-(Date.now()-lastDirTs); 
-  if(wait>0) await new Promise(r=>setTimeout(r,wait));
+/* ====== ORS API 呼び出し（レート制限対策・エラー詳細化版） ====== */
+
+// ★変更点1: 待機時間を 1100ms -> 2500ms (2.5秒) に変更
+// 無料枠は「1分間に40回」なので、1回あたり最低1.5秒は必要。余裕を持って2.5秒にします。
+const ORS_INTERVAL = 2500; 
+
+async function dir(body, profile) {
+  // 現在時刻と前回の差分を計算
+  const now = Date.now();
+  const elapsed = now - lastDirTs;
+  const wait = ORS_INTERVAL - elapsed;
+
+  // まだ時間が経っていなければ待機
+  if (wait > 0) {
+    await new Promise(r => setTimeout(r, wait));
+  }
 
   // ★ ORS 呼び出し回数カウント
-  API_USED.orsTotal++;
+  if (typeof API_USED !== 'undefined') {
+    API_USED.orsTotal++;
+  }
 
-  const d=await post(`${ORS_ROOT}/v2/directions/${profile}/geojson`,body);
-  lastDirTs=Date.now();
-  return d;
+  try {
+    const d = await post(`${ORS_ROOT}/v2/directions/${profile}/geojson`, body);
+    // 成功したら時刻を更新
+    lastDirTs = Date.now();
+    return d;
+  } catch (e) {
+    // エラーでも時刻更新（連続リトライによるパンクを防ぐため）
+    lastDirTs = Date.now();
+    throw e;
+  }
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': ORS_KEY
+    },
+    body: JSON.stringify(body)
+  });
+
+  // ★変更点2: エラー時にステータスコードだけでなく、サーバーからのメッセージも読み取る
+  if (!r.ok) {
+    let errorMsg = `Error ${r.status}`;
+    try {
+      // サーバーが返す詳細なエラー文（"Rate limit exceeded"等）を取得
+      const txt = await r.text();
+      errorMsg += `: ${txt}`;
+    } catch (e) {
+      // text取得失敗時は無視
+    }
+    // CORSエラーや429エラーの内容をコンソールで見れるようにする
+    throw new Error(errorMsg);
+  }
+
+  return r.json();
 }
 
 
@@ -1103,18 +1171,18 @@ async function drawRoutes(){
 
   try{
     const tkORS = tStart('ORS: 最短/最速');
-const shortest = await dir({...base, preference:'shortest'}, profile);
-const fastest  = await dir({...base, preference:'fastest'},  profile);
-tEnd(tkORS, `pts=${pts.length}`);
+    const shortest = await dir({...base, preference:'shortest'}, profile);
+    const fastest  = await dir({...base, preference:'fastest'},  profile);
+    tEnd(tkORS, `pts=${pts.length}`);
 
 
     let slope = shortest.features[0];
     let arterial = fastest.features[0];
     if(coords.length===2){
       const tkAlt = tStart('ORS: 代替経路');
-const alt = await dir({...base, preference:'shortest',
-  alternative_routes:{target_count:3,share_factor:0.6,weight_factor:1.4}}, profile);
-tEnd(tkAlt, `alts=${(alt.features||[]).length}`);
+      const alt = await dir({...base, preference:'shortest',
+        alternative_routes:{target_count:3,share_factor:0.6,weight_factor:1.4}}, profile);
+      tEnd(tkAlt, `alts=${(alt.features||[]).length}`);
 
       const feats = alt.features || [];
       if(feats.length){
@@ -1150,8 +1218,8 @@ tEnd(tkAlt, `alts=${(alt.features||[]).length}`);
     const flat = 18; // 平坦係数
     const baseFeature = routeData.arterial || routeData.fastest;
     const tkRest = tStart('休憩トリガ生成');
-const rests = await makeRestPoints(baseFeature, mass, flat);
-tEnd(tkRest, `hits=${rests.length}`);
+    const rests = await makeRestPoints(baseFeature, mass, flat);
+    tEnd(tkRest, `hits=${rests.length}`);
 
 
     restGroups = (rests || []).map(r => ({ rest: r, pois: [] }));
@@ -1160,8 +1228,8 @@ tEnd(tkRest, `hits=${rests.length}`);
 
     if (rests.length) {
       // リストに挿入（ゴール直前）
-     rests.forEach(r => {
-       pts.splice(pts.length-1, 0,
+      rests.forEach(r => {
+        pts.splice(pts.length-1, 0,
                   { name:'休憩', lat:r.lat, lon:r.lon, type:'via', isRest:true });
         // ▼ r が有効なスコープ内で push
         restList.push({distance:(r.routeD/1000).toFixed(2), lat:r.lat, lon:r.lon});
@@ -1181,55 +1249,61 @@ tEnd(tkRest, `hits=${rests.length}`);
       }
 
       // POI検索（半径固定・近い順に n 件）
-if ($('poiToggle').checked) {
-  const baseRadius = Number($('poiRadius').value) || 500;
-  const limit = Math.max(1, Number($('poiLimit').value) || 5);
-  // ★ ここで今回の休憩場所検索開始時点のカウントを記録
-  const overpassBefore = OVERPASS_CALL_TOTAL;
+      if ($('poiToggle').checked) {
+        const baseRadius = Number($('poiRadius').value) || 500;
+        const limit = Math.max(1, Number($('poiLimit').value) || 5);
+        // ★ ここで今回の休憩場所検索開始時点のカウントを記録
+        const overpassBefore = OVERPASS_CALL_TOTAL;
 
-  for (let idx = 0; idx < rests.length; idx++) {
-    const r = rests[idx];
-    try {
-      const tkPOI = tStart(`POI#${idx+1}`);
-const pois = await fetchPoisAround(r.lat, r.lon, baseRadius, limit);
-tEnd(tkPOI, `found=${pois.length}`);
+        for (let idx = 0; idx < rests.length; idx++) {
+          const r = rests[idx];
+          
+          // ★★★ 追加対策：前の検索から必ず3秒空ける（Overpass負荷軽減） ★★★
+          if (idx > 0) {
+             await new Promise(res => setTimeout(res, 3000));
+          }
 
-      logRest(`[POI] ${(r.routeD / 1000).toFixed(2)} km: 半径${baseRadius}m → ${pois.length}件（近い順）`);
+          try {
+            const tkPOI = tStart(`POI#${idx+1}`);
+            const pois = await fetchPoisAround(r.lat, r.lon, baseRadius, limit);
+            tEnd(tkPOI, `found=${pois.length}`);
 
-      // ▼ 追加：この休憩トリガーのPOIを保存
-      if (restGroups[idx]) {
-        restGroups[idx].pois = pois.map(p => ({ ...p, triggerIndex: idx }));
+            logRest(`[POI] ${(r.routeD / 1000).toFixed(2)} km: 半径${baseRadius}m → ${pois.length}件（近い順）`);
+
+            // ▼ 追加：この休憩トリガーのPOIを保存
+            if (restGroups[idx]) {
+              restGroups[idx].pois = pois.map(p => ({ ...p, triggerIndex: idx }));
+            }
+              
+            // 既存：マップに描画
+            pois.forEach(po => {
+              L.marker([po.lat, po.lon], {
+                icon: new L.Icon({
+                  iconUrl: 'https://maps.gstatic.com/mapfiles/ms2/micons/purple.png',
+                  iconSize: [24, 24],
+                  iconAnchor: [12, 24]
+                })
+              }).bindTooltip(`${po.name}${typeof po.distFromTriggerM === 'number' ? ` (${formatDist(po.distFromTriggerM)})` : ''}`).addTo(markerLayer);
+            });
+          } catch (e) {
+            logRest(`[POI] ${(r.routeD / 1000).toFixed(2)} km: 取得失敗`);
+          }
+        }
+
+        //パネルへ反映
+        ensureProjections();
+        updateRestPoiPanel();
+        // ★ ここで今回使った回数と累計を「最後の行」として出す
+        const usedThisTime = OVERPASS_CALL_TOTAL - overpassBefore;
+        logRest(`--- Overpass API 呼び出し: 今回 ${usedThisTime} 回 / 累計 ${OVERPASS_CALL_TOTAL} 回 ---`);
       }
-        
-      // 既存：マップに描画
-      pois.forEach(po => {
-        L.marker([po.lat, po.lon], {
-          icon: new L.Icon({
-            iconUrl: 'https://maps.gstatic.com/mapfiles/ms2/micons/purple.png',
-            iconSize: [24, 24],
-            iconAnchor: [12, 24]
-          })
-        }).bindTooltip(`${po.name}${typeof po.distFromTriggerM === 'number' ? ` (${formatDist(po.distFromTriggerM)})` : ''}`).addTo(markerLayer);
-      });
-    } catch (e) {
-      logRest(`[POI] ${(r.routeD / 1000).toFixed(2)} km: 取得失敗`);
-    }
-  }
-
-  //パネルへ反映
-  ensureProjections();
-  updateRestPoiPanel();
-  // ★ ここで今回使った回数と累計を「最後の行」として出す
-  const usedThisTime = OVERPASS_CALL_TOTAL - overpassBefore;
-  logRest(`--- Overpass API 呼び出し: 今回 ${usedThisTime} 回 / 累計 ${OVERPASS_CALL_TOTAL} 回 ---`);
-}
 
     }
 
-// デフォルト表示は幹線優先（なければ最速）
-const prefer = routeData.arterial ? 'arterial' : 'fastest';
-showSingleRoute(prefer, true);
-setActiveButton(prefer === 'arterial' ? $('btnShowArterial') : $('btnShowFastest'));
+    // デフォルト表示は幹線優先（なければ最速）
+    const prefer = routeData.arterial ? 'arterial' : 'fastest';
+    showSingleRoute(prefer, true);
+    setActiveButton(prefer === 'arterial' ? $('btnShowArterial') : $('btnShowFastest'));
 
   }catch(e){
     console.error(e);
@@ -1495,55 +1569,88 @@ function summaryStats(arr){
   return {mean:m, var:v, std:Math.sqrt(v)};
 }
 
-/* ===== Overpass（保守的実装） ===== */
+/* ====== Overpass API 呼び出し（強化版） ====== */
+
+// 待機用ヘルパー（これが必要です）
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function overpassQuery(query) {
   const endpoints = [
     'https://overpass-api.de/api/interpreter',
-    //'https://overpass.kumi.systems/api/interpreter'
+    // バックアップが必要ならコメントアウトを外す
+    // 'https://overpass.kumi.systems/api/interpreter' 
   ];
-  let lastStatus = 0, lastText = '';
+  
+  let lastError = null;
 
   for (const ep of endpoints) {
     try {
-      // ★ ここで呼び出し回数をカウント
-      API_USED.overpassTotal++;
-      OVERPASS_CALL_TOTAL++;
+      // ★ 呼び出し前に必ず1秒待つ（グローバルな負荷軽減）
+      await sleep(1000); 
+
+      // カウンタ更新
+      if (typeof API_USED !== 'undefined') API_USED.overpassTotal++;
+      if (typeof OVERPASS_CALL_TOTAL !== 'undefined') OVERPASS_CALL_TOTAL++;
 
       const r = await fetch(ep, {
         method: 'POST',
         headers: {
-          'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8',
-          'Accept': 'application/json,text/plain,*/*'
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
         },
         body: new URLSearchParams({ data: query }).toString()
       });
-      lastStatus = r.status;
-      if (r.ok) return r.json();
-      lastText = await r.text();
-      if (r.status === 400) {
-        console.warn('[Overpass] 400 detected.\n---QUERY START---\n' + query + '\n---QUERY END---\n' +
-                     '---RESPONSE START---\n' + lastText + '\n---RESPONSE END---');
+
+      if (r.ok) return await r.json();
+
+      // エラー時の処理
+      const txt = await r.text().catch(() => "");
+      
+      // 429 (Too Many Requests) の場合 -> サーバーから「待ちなさい」と言われている
+      if (r.status === 429) {
+        console.warn(`[Overpass] 429 Detected on ${ep}. Waiting 10s...`);
+        await sleep(10000); // 10秒待機
+        throw new Error("RateLimit"); // リトライさせるためにエラーを投げる
       }
+
+      // 504 (Timeout) の場合 -> クエリが重すぎる
+      if (r.status === 504) {
+        console.warn(`[Overpass] 504 Timeout on ${ep}. Query too heavy.`);
+        lastError = new Error(`Timeout 504: ${txt}`);
+        continue; // 別のエンドポイントならいけるかも？（可能性は低いが）
+      }
+
+      lastError = new Error(`Status ${r.status}: ${txt}`);
+
     } catch (e) {
-      lastText = e.message || String(e);
+      if (e.message === "RateLimit") throw e; // Retry関数でキャッチさせる
+      console.warn(`[Overpass] Error on ${ep}:`, e);
+      lastError = e;
     }
   }
-  throw new Error(`[Overpass] all attempts failed. Last status=${lastStatus}. Snippet=${(lastText||'').slice(0,1200)}`);
+  throw lastError || new Error('[Overpass] All endpoints failed.');
 }
+
 async function overpassRetry(query) {
-  let delay = 800;
-  for (let i=0;i<5;i++) {
+  // リトライ回数を減らし、間隔を広げる
+  let delay = 3000; // 初回3秒待機
+
+  for (let i = 0; i < 3; i++) { // 最大3回トライ
     try {
       return await overpassQuery(query);
     } catch (e) {
-      if (String(e).includes('status=400')) throw e; // 構文系は打ち切り
-      await new Promise(res=>setTimeout(res, delay));
-      delay = Math.min(6000, Math.round(delay*1.8));
+      // 構文エラーなら即死
+      if (String(e).includes('status=400')) throw e;
+      
+      console.warn(`[Overpass] Retry ${i+1}/3 after ${delay}ms...`);
+      await sleep(delay);
+      
+      // 待機時間を倍々に増やす (3s -> 6s -> 12s)
+      delay *= 2;
     }
   }
+  // 最後にもう一度だけトライしてダメなら諦める
   return await overpassQuery(query);
 }
-
 /* ===== POI取得（改良版）：カテゴリ自動拡張＋半径段階拡大＋距離ソート ===== */
 async function fetchPoisAround(latRaw, lonRaw, baseRadius, limit) {
   // --- 入力/前処理 ---
@@ -1788,6 +1895,10 @@ function updateRestPoiPanel(){
     ol.appendChild(li);
   });
   drawRestBeams();
+  // ▼▼ 追加: 手動比較ツールのUIも更新する ▼▼
+  if (typeof updateManualRouteUI === 'function') {
+    updateManualRouteUI();
+  }
 }
   
 // 休憩トリガー ↔ POI を線で結んで可視化する
@@ -2815,7 +2926,7 @@ async function viterbiRouteCost(p1, p2, profile){
   return { dist, time, energy };
 }
 
-// ▼▼ 総当たりを1回分だけ実行して全結果を返す関数 ▼▼
+/* ====== 総当たり (runBruteforceOnce) 修正版 ====== */
 async function runBruteforceOnce(start, goal, restGroups, profile){
   // 休憩トリガーごとの POI を取得（poiLimit まで）
   const perGroupLimit = Math.max(1, Number($('poiLimit').value) || 5);
@@ -2827,11 +2938,20 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     throw new Error('組み合わせ候補が作れませんでした。');
   }
 
-   const ideals = getIdealPerLegs();
-  const idealDistPerLeg   = ideals.idealDistPerLeg;
-  const idealTimePerLeg   = ideals.idealTimePerLeg;
-  const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
-  const T = Array.isArray(restGroups) ? restGroups.length : 0;
+  // 理想値の取得
+  const ideals = getIdealPerLegs();
+  
+  // ★修正点1: 「区間ごと」の理想値を計算
+  // 実際の区間数 = 休憩所数(groups) + 1 (Start->Goal間)
+  // ※ null(スキップ)がある場合、本来は区間数が減りますが、
+  //   現在のcombosロジックは「全トリガーから選ぶ」前提のようなので、
+  //   ここでは restGroups.length + 1 で割ります。
+  
+  const T = restGroups.length;
+  const numLegs = T + 1; // Start->P1->...->Goal の区間数
+  
+  const totalIdealEnergy = ideals.idealEnergyPerLeg; // 全体合計値
+  const segmentIdealEnergy = totalIdealEnergy / numLegs; // ★区間平均値
 
   const results = [];
   let okCount = 0;
@@ -2851,30 +2971,20 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     try {
       const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
 
-      // // ★ 追加：Viterbi と同じ MSE スコアで評価
-      // const mseScore = routeMseScoreFromStats(
-      //   stats,
-      //   idealDistPerLeg,
-      //   idealTimePerLeg,
-      //   idealEnergyPerLeg
-      // );
+      // ★修正点2: 計算用関数に「区間平均値」を渡す
+      // routeEnergyMseFromStats は (val - ideal)^2 を計算する関数
+      const eScore = routeEnergyMseFromStats(stats, segmentIdealEnergy);
 
-      // // ※ ここでは _w による補正はせず、そのままMSEのみで比較する
-      // const score    = mseScore;
-      // const rawScore = mseScore;
-
-      const eScore = routeEnergyMseFromStats(stats, idealEnergyPerLeg);
-const score    = eScore;
-const rawScore = eScore;
-
+      const score    = eScore;
+      const rawScore = eScore;
 
       results.push({
-        score,           // MSEスコア（小さいほど「理想ペースに近い」）
-        rawScore,        // 今は score と同じ（CSVなどで使いやすいよう一応残す）
-        feature,         // ORS の GeoJSON Feature
-        picks,           // 実際に経由した POI の配列
-        picksByTrigger: cmb, // トリガーごとの採用状況（null を含み得る）
-        stats            // {dist:[], time:[], energy:[]} 区間ごとの値
+        score,            // これで小さい値（数万〜数十万）になります
+        rawScore,        
+        feature,          
+        picks,            
+        picksByTrigger: cmb, 
+        stats            
       });
       okCount++;
     } catch (e){
@@ -3368,6 +3478,23 @@ window.__viterbiAllEdgeRows = Array.from(window.__viterbiEdgeAgg.values()).map(x
         panel.textContent += '\n[対策F エラー] ' + (e.message || e) + '\n';
       }
     }
+
+/* ---------- 対策G: SG排除 + Viterbi ---------- */
+  if (isAlgoEnabled('dbg_G') || true) { 
+    const t0 = performance.now();
+    try {
+      // 端処理用の候補があれば優先、なければ通常候補
+      const targetGroups = (typeof groupsC !== 'undefined' && groupsC.length) ? groupsC : vitGroups;
+
+      const gList = await solveMeasureG(start, goal, targetGroups, profile);
+      
+      const t1 = performance.now();
+      pushAlgoResultsForCsv('G', 'SG排除+Viterbi', gList, t1 - t0, -1, 0);
+
+    } catch (e) {
+      console.error('Algo G fail:', e);
+    }
+  }
 
     // ----------------------------------------------------------
     // 全体時間
@@ -3961,7 +4088,9 @@ function recordViterbiEdge(row){
     sumEnergyKj: 0,
     sumDistKm: 0,
     sumTimeMin: 0,
-    sumCost: 0
+    sumCost: 0,
+    // ▼▼ 追加: 理想値を保存（最初の1回目の値を採用） ▼▼
+    idealEnergyKj: row.idealEnergyPerLeg
   };
 
   cur.count += 1;
@@ -4784,6 +4913,123 @@ function applyAutoNamesToAllPois(){
   }
 }
 
+/* ==========================================================
+   【対策G・完全版】SG排除 BeamSearch + 一括リランク
+   ・S/G区間を無視して、中間のつながりが良い候補をTopK個選出
+   ・最後に一括API(Batch)で正確なスコアを出して並び替え
+   ========================================================== */
+async function solveMeasureG(start, goal, groups, profile) {
+  const T = Array.isArray(groups) ? groups.length : 0;
+  if (!T) return [];
+
+  // 1. 設定
+  const BEAM_WIDTH = 30; // 予選通過させる候補数 (TopK)
+  const TOTAL_IDEAL_ENERGY = 1583.42; // 全体の理想エネルギー(固定値または引数)
+  
+  // 区間ごとの理想値 (全区間数 = POIグループ数 + 1)
+  // S/Gを除外しても「ペース配分」は全体基準で合わせるのが正解
+  const numSegments = T + 1;
+  const idealSeg = TOTAL_IDEAL_ENERGY / numSegments;
+
+  // API関数 (キャッシュ対応版を想定)
+  const apiFunc = calcLegCostWithApi; 
+
+  // --- Step 0: Start -> Group 0 (Layer 0) ---
+  // ★SG排除: スタート区間のコストは無視(=0)
+  // ここで最初のパスリストを作る
+  let currentPaths = groups[0].map(poi => ({
+    picks: [poi],           // 選択されたPOIのリスト
+    currentCost: 0,         // コストは0スタート
+    lastNode: poi
+  }));
+
+  // --- Step 1..T-1: 中間区間 (Layer t) ---
+  for (let t = 1; t < T; t++) {
+    const nextGroup = groups[t];
+    let nextCandidates = [];
+
+    // 現在の候補(currentPaths)から、次のグループ(nextGroup)へ総当たり
+    for (const path of currentPaths) {
+      for (const nextPoi of nextGroup) {
+        
+        // 区間コスト取得 (キャッシュ or API)
+        const leg = await apiFunc(path.lastNode, nextPoi, profile);
+        
+        // ★中間の区間なので、理想値とのズレ(MSE)を計算
+        // Physics.costMSE の代わりに直接計算
+        const diff = leg.energy_kJ - idealSeg;
+        const penalty = diff * diff;
+
+        // 候補に追加
+        nextCandidates.push({
+          picks: [...path.picks, nextPoi],
+          currentCost: path.currentCost + penalty, // 累積
+          lastNode: nextPoi
+        });
+      }
+    }
+
+    // ソートして上位(BEAM_WIDTH)だけ残す
+    nextCandidates.sort((a, b) => a.currentCost - b.currentCost);
+    currentPaths = nextCandidates.slice(0, BEAM_WIDTH);
+  }
+
+  // --- Last Step: Group Last -> Goal ---
+  // ★SG排除: ゴール区間のコスト計算は「しない」
+  // したがって、この時点で currentPaths に残っているのが
+  // 「中間セクションが優秀なルート候補(TopK)」になる
+
+  console.log(`Algo G: 予選通過 ${currentPaths.length} 件。決勝(リランク)開始...`);
+
+  // --- Final Step: 一括APIでリランク (決勝戦) ---
+  const finalResults = [];
+
+  for (let i = 0; i < currentPaths.length; i++) {
+    const candidate = currentPaths[i];
+    
+    // 経路を構築: [Start] + [中間POIたち] + [Goal]
+    const waypoints = [start, ...candidate.picks, goal];
+
+    try {
+      // ★ここで一括APIを呼び、真のスコア(Batch Score)を出す
+      // calcBatchRouteStats は修正済みのものを使用
+      const stats = await calcBatchRouteStats(waypoints, profile, TOTAL_IDEAL_ENERGY);
+
+      finalResults.push({
+        rank: 0, // あとで埋める
+        score: stats.score, // これが最終評価値
+        rawScore: stats.rawScore,
+        
+        // ログ・CSV出力用データ
+        poi_names: candidate.picks.map(p => p.name).join(' -> '),
+        poi_latlngs: candidate.picks.map(p => `${p.lat},${p.lon}`).join(' | '),
+        sigmaEnergy: stats.sigmaEnergy,
+        totalEnergy: stats.totalEnergy,
+        dist: stats.dist,
+        time: stats.time,
+        
+        // 描画用データ (feature)
+        // 必要なら stats から復元するか、別途構築
+        picks: candidate.picks
+      });
+      
+      // APIレートリミット対策 (少し待つ)
+      // await new Promise(r => setTimeout(r, 100));
+
+    } catch (e) {
+      console.warn(`Algo G: リランク失敗 (Candidate ${i})`, e);
+    }
+  }
+
+  // スコアの良い順(昇順)に並び替え
+  finalResults.sort((a, b) => a.score - b.score);
+
+  // ランク付与
+  finalResults.forEach((r, idx) => r.rank = idx + 1);
+
+  return finalResults;
+}
+
 function formatNum(x, digits=3){
   const n = Number(x);
   if (!Number.isFinite(n)) return '';
@@ -4793,6 +5039,26 @@ function formatNum(x, digits=3){
 function renderViterbiEdgePanel(limit=400){
   const pre  = document.getElementById('viterbiEdgePanel');
   const stat = document.getElementById('viterbiEdgeStat');
+
+  // ▼▼ 追加: 表示時も最新データ（理想値入り）を再生成して反映させる ▼▼
+  if (window.__viterbiEdgeAgg) {
+    window.__viterbiAllEdgeRows = Array.from(window.__viterbiEdgeAgg.values()).map(x => {
+      const n = Math.max(1, x.count);
+      return {
+        fromIdx: x.fromIdx, toIdx: x.toIdx,
+        fromName: x.fromName, toName: x.toName,
+        fromLat: x.fromLat, fromLon: x.fromLon,
+        toLat: x.toLat, toLon: x.toLon,
+        count: x.count,
+        energyKj: x.sumEnergyKj / n,
+        distKm: x.sumDistKm / n,
+        timeMin: x.sumTimeMin / n,
+        cost: x.sumCost / n,
+        idealEnergyKj: x.idealEnergyKj // 理想値を取り込む
+      };
+    });
+  }
+
   const rows = window.__viterbiAllEdgeRows || [];
 
   if (stat) stat.textContent = `件数: ${rows.length}`;
@@ -4806,8 +5072,8 @@ function renderViterbiEdgePanel(limit=400){
   const slice = rows.slice(0, limit);
 
   const lines = [];
-  // ★ 集約向け：count/cost を出す
-  lines.push('from\tto\tcount\tdist_km\ttime_min\tenergy_kJ\tcost');
+  // ★ ヘッダーに ideal_kJ を追加
+  lines.push('from\tto\tcount\tdist_km\ttime_min\tenergy_kJ\tideal_kJ\tcost');
 
   for (const r of slice){
     lines.push([
@@ -4817,6 +5083,7 @@ function renderViterbiEdgePanel(limit=400){
       formatNum(r.distKm, 3),
       formatNum(r.timeMin, 2),
       formatNum(r.energyKj, 2),
+      formatNum(r.idealEnergyKj, 2), // ★ここに値を追加
       formatNum(r.cost, 3)
     ].join('\t'));
   }
@@ -4827,6 +5094,28 @@ function renderViterbiEdgePanel(limit=400){
 }
 
 function downloadViterbiEdgesCsv(){
+  // ▼▼ 追加: Mapがあるなら、そこから最新のリスト(理想値付き)を再生成する ▼▼
+  if (window.__viterbiEdgeAgg) {
+    window.__viterbiAllEdgeRows = Array.from(window.__viterbiEdgeAgg.values()).map(x => {
+      const n = Math.max(1, x.count);
+      return {
+        fromIdx: x.fromIdx,
+        toIdx: x.toIdx,
+        fromName: x.fromName,
+        toName: x.toName,
+        fromLat: x.fromLat,
+        fromLon: x.fromLon,
+        toLat: x.toLat,
+        toLon: x.toLon,
+        count: x.count,
+        energyKj: x.sumEnergyKj / n,
+        distKm: x.sumDistKm / n,
+        timeMin: x.sumTimeMin / n,
+        cost: x.sumCost / n,
+        idealEnergyKj: x.idealEnergyKj // 新しい項目
+      };
+    });
+  }
   const rows = window.__viterbiAllEdgeRows || [];
   if (!rows.length){
     alert('Viterbiのエッジログがありません。先にViterbiを実行してください。');
@@ -4842,6 +5131,7 @@ function downloadViterbiEdgesCsv(){
     'from_lat','from_lon','to_lat','to_lon',
     'count',
     'energy_kJ',
+    'ideal_energy_kJ', // 追加
     'dist_km',
     'time_min',
     'cost'
@@ -4851,22 +5141,24 @@ function downloadViterbiEdgesCsv(){
   lines.push(header.join(','));
 
   for (const r of rows){
-  lines.push([
-    r.fromIdx ?? '',
-    r.toIdx ?? '',
-    `"${esc(r.fromName)}"`,
-    `"${esc(r.toName)}"`,
-    r.fromLat ?? '',
-    r.fromLon ?? '',
-    r.toLat ?? '',
-    r.toLon ?? '',
-    r.count ?? 1,
-    r.energyKj ?? '',
-    r.distKm ?? '',
-    r.timeMin ?? '',
-    r.cost ?? ''
-  ].join(','));
-}
+    // ★ここを修正：ideal_energy_kJ を挿入し、formatNumで整形
+    lines.push([
+      r.fromIdx ?? '',
+      r.toIdx ?? '',
+      `"${esc(r.fromName)}"`,
+      `"${esc(r.toName)}"`,
+      r.fromLat ?? '',
+      r.fromLon ?? '',
+      r.toLat ?? '',
+      r.toLon ?? '',
+      r.count ?? 1,
+      formatNum(r.energyKj, 2),
+      formatNum(r.idealEnergyKj, 2), // ★ここに値を追加！
+      formatNum(r.distKm, 3),
+      formatNum(r.timeMin, 2),
+      formatNum(r.cost, 3)
+    ].join(','));
+  }
 
   // Excel対策：UTF-8 BOM
   const bom = new Uint8Array([0xEF,0xBB,0xBF]);
@@ -4974,10 +5266,353 @@ function renderViterbiEdgesPanel(show){
   el.textContent = lines.join('\n');
 }
 
+/* ==============================================
+   手動ルート比較機能（強力版）
+   ============================================== */
+let manualRouteLayerGroup = null;
+
+// データを安全に取得するヘルパー
+function getGlobalRestGroups() {
+  // window.restGroups か、グローバル変数の restGroups を探す
+  if (typeof restGroups !== 'undefined' && Array.isArray(restGroups)) return restGroups;
+  if (window.restGroups && Array.isArray(window.restGroups)) return window.restGroups;
+  return [];
+}
+
+// 1. セレクトボックスのUIを更新する関数
+function updateManualRouteUI() {
+  console.log('[ManualRoute] updateManualRouteUI called');
+  
+  const container = document.getElementById('manualRouteSelectors');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const groups = getGlobalRestGroups();
+  console.log('[ManualRoute] restGroups count:', groups.length);
+
+  if (!groups || !groups.length) {
+    container.innerHTML = '<span style="color:red;">データが見つかりません。<br>1. 「休憩場所検索」を実行してください。<br>2. それでも出ない場合はこの上の「更新」ボタンを押してください。</span>';
+    return;
+  }
+
+  // トリガーごとにセレクトボックス作成
+  groups.forEach((g, idx) => {
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.alignItems = 'center';
+    row.style.gap = '8px';
+
+    const label = document.createElement('span');
+    label.textContent = `トリガー#${idx + 1}:`;
+    label.style.minWidth = '70px';
+    label.style.fontWeight = 'bold';
+
+    const select = document.createElement('select');
+    select.id = `manualSel_${idx}`;
+    select.style.flex = '1';
+
+    // 候補POIをoptionに追加
+    const pois = Array.isArray(g.pois) ? g.pois : [];
+    
+    if (pois.length === 0) {
+      const opt = document.createElement('option');
+      opt.text = '(候補なし)';
+      opt.value = -1;
+      select.add(opt);
+      select.disabled = true;
+    } else {
+      pois.forEach((p, pIdx) => {
+        const name = p.name || `POI${idx}_${pIdx}`;
+        const opt = document.createElement('option');
+        opt.text = name;
+        opt.value = pIdx;
+        select.add(opt);
+      });
+      select.selectedIndex = 0;
+    }
+
+    row.appendChild(label);
+    row.appendChild(select);
+    container.appendChild(row);
+  });
+  
+  console.log('[ManualRoute] UI updated successfully');
+}
+
+/* ==============================================
+   手動ルート比較機能（完全版：時間・エネルギー・差分対応）
+   ============================================== */
+
+window.drawManualComparison = async function() {
+  console.log('[ManualRoute] ボタンクリック検知');  
+   
+  const infoBox = document.getElementById('manualRouteInfo');
+  const btn = document.getElementById('btnDrawManualRoute');
+  const profile = document.getElementById('profileSelect')?.value || 'cycling-road'; 
+
+  // ボタン連打防止
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '初期化中...';
+  }
+  if (infoBox) infoBox.textContent = '準備中...';
+
+  try {
+    // -------------------------------------------------
+    // 1. データチェック (変更なし)
+    // -------------------------------------------------
+    
+    let groups = [];
+    if (typeof getGlobalRestGroups === 'function') {
+      groups = getGlobalRestGroups();
+    } else if (typeof restGroups !== 'undefined') {
+      groups = restGroups;
+    } else if (window.restGroups) {
+      groups = window.restGroups;
+    }
+
+    if (!groups || !groups.length) {
+      throw new Error('休憩トリガーデータがありません。リスト更新ボタンを押してみてください。');
+    }
+
+    if (typeof pts === 'undefined' || !Array.isArray(pts)) {
+       throw new Error('地点データ(pts)が見つかりません');
+    }
+    const start = pts.find(p => p.type === 'start') || pts[0];
+    const goal = pts.find(p => p.type === 'goal') || pts[pts.length - 1];
+    
+    if (!start || !goal) {
+      throw new Error('スタートまたはゴール地点が設定されていません');
+    }
+
+    // -------------------------------------------------
+    // 2. UIから選択されたPOIを回収 (変更なし)
+    // -------------------------------------------------
+    const picks = [];
+    for (let i = 0; i < groups.length; i++) {
+      const sel = document.getElementById(`manualSel_${i}`);
+      if (!sel) throw new Error(`UIエラー: セレクトボックス manualSel_${i} が見つかりません。`);
+      
+      if (sel.disabled || sel.value == -1) {
+         throw new Error(`トリガー#${i+1} のPOIが選択されていません（候補なし）。`);
+      }
+      
+      const pIdx = Number(sel.value);
+      const p = groups[i].pois[pIdx];
+      if (!p) throw new Error(`データエラー: 選択されたPOI(index:${pIdx})が見つかりません。`);
+      picks.push(p);
+    }
+
+    // -------------------------------------------------
+    // 3. 地図のリセット処理 (変更なし)
+    // -------------------------------------------------
+    
+    if (typeof clearRouteLayers === 'function') {
+      clearRouteLayers();
+    } else if (typeof routeLayers !== 'undefined') {
+      Object.values(routeLayers).forEach(l => map.removeLayer(l));
+      routeLayers = {};
+    }
+
+    if (typeof markerLayer !== 'undefined' && markerLayer) {
+      markerLayer.clearLayers();
+    }
+
+    if (typeof clearRestBeams === 'function') {
+      clearRestBeams();
+    } else if (typeof restBeamLayer !== 'undefined' && restBeamLayer) {
+      restBeamLayer.clearLayers();
+    }
+
+    if (typeof manualRouteLayerGroup === 'undefined' || manualRouteLayerGroup === null) {
+      manualRouteLayerGroup = L.layerGroup().addTo(map);
+    } else {
+      manualRouteLayerGroup.clearLayers();
+    }
+
+    // -------------------------------------------------
+    // 4. API計算と描画（★ここを修正★）
+    // -------------------------------------------------
+    if (btn) btn.textContent = 'ルート計算中...';
+    
+    const showBatch = document.getElementById('chkManBatch')?.checked;
+    const showSeg   = document.getElementById('chkManSeg')?.checked;
+    
+    // 結果保持用
+    let batchRes = { dist: 0, time: 0, energy: 0 };
+    let segRes   = { dist: 0, time: 0, energy: 0, count: 0 };
+
+    // --- A. 一括 (Batch) ---
+    if (showBatch) {
+      // 修正済み(区間理想を使う)の calcBatchRouteStats を使うのがベストですが
+      // ここでは既存の routeLegStatsForWaypoints と手動計算でやります
+      const wps = [start, ...picks, goal].map(p => ({ lat: p.lat, lon: p.lon, name: p.name || 'WP' }));
+      
+      if (typeof routeLegStatsForWaypoints !== 'function') {
+        throw new Error('関数 routeLegStatsForWaypoints が見つかりません');
+      }
+
+      const out = await routeLegStatsForWaypoints(wps, profile);
+      
+      if (out && out.feature) {
+        // 青太線
+        L.geoJSON(out.feature, {
+          style: { color: '#0055aa', weight: 8, opacity: 0.6 }
+        }).bindTooltip("一括ルート").addTo(manualRouteLayerGroup);
+        
+        // ORSのsummaryから取得
+        const sum = out.feature.properties.summary;
+        batchRes.dist = sum.distance / 1000; // km
+        batchRes.time = sum.duration / 60;   // min
+        
+        // エネルギー: stats.energy の合計
+        if (out.stats && Array.isArray(out.stats.energy)) {
+           batchRes.energy = out.stats.energy.reduce((a,b)=>a+b, 0);
+        }
+      }
+    }
+
+    // --- B. 区間積上 (Segmented) ---
+    if (showSeg) {
+      const points = [start, ...picks, goal];
+      
+      // cache対応の calcLegCostWithApi があればそれを使う（なければ dir で都度計算）
+      // ここでは、確実に動くように dir をループで呼びます（既存ロジック踏襲）
+      
+      for (let i = 0; i < points.length - 1; i++) {
+        const from = points[i];
+        const to = points[i+1];
+        
+        // API呼び出し（ヘルパーがあればそちらを推奨）
+        let legEnergy = 0;
+        let legDist = 0;
+        let legTime = 0;
+        let feature = null;
+
+        if (typeof calcLegCostWithApi === 'function') {
+           // キャッシュ対応API関数がある場合
+           const leg = await calcLegCostWithApi(from, to, profile);
+           legEnergy = leg.energy_kJ;
+           legDist   = leg.dist_km * 1000; // mに戻す
+           legTime   = leg.time_min * 60;  // secに戻す
+           // Featureが必要なら別途取得、または calcLegCostWithApi が返すなら使う
+           // ここでは描画用に dir を再取得するか、API関数の仕様に合わせる
+           // (簡易的に dir を呼び直して描画します)
+           const res = await dir({ coordinates: [[from.lon, from.lat], [to.lon, to.lat]], elevation:true }, profile);
+           feature = res.features[0];
+        } else {
+           // 直接 dir を呼ぶ場合
+           const coords = [[from.lon, from.lat], [to.lon, to.lat]];
+           const res = await dir({ coordinates: coords, elevation: true }, profile);
+           if (!res || !res.features || !res.features[0]) throw new Error(`区間${i+1}取得失敗`);
+           
+           feature = res.features[0];
+           const sum = feature.properties.summary;
+           legDist = sum.distance;
+           legTime = sum.duration;
+           
+           // エネルギー計算（既存関数があれば利用）
+           // なければ簡易計算: Physics.calcEnergy or 0
+           if (typeof calculateEnergy === 'function') {
+               const eData = calculateEnergy(feature.properties.segments[0], 0); // 第2引数は累積距離
+               legEnergy = eData.energy_kJ;
+           } else {
+               // ※ここにあなたのエネルギー計算式を入れてください
+               legEnergy = 0; 
+           }
+        }
+
+        // 赤点線
+        if (feature) {
+            L.geoJSON(feature, {
+              style: { color: '#aa0000', weight: 4, dashArray: '10, 10', opacity: 1.0 }
+            }).bindTooltip(`区間 ${i+1}`).addTo(manualRouteLayerGroup);
+        }
+
+        segRes.dist += legDist / 1000; // km
+        segRes.time += legTime / 60;   // min
+        segRes.energy += legEnergy;
+        segRes.count++;
+      }
+    }
+
+    // -------------------------------------------------
+    // 5. 結果表示 (HTML生成) ★ここがメイン
+    // -------------------------------------------------
+    const fmt = (n, d=1) => Number(n).toFixed(d);
+    const diffColor = (a, b) => (Math.abs(a - b) > 0.1) ? '#e00' : '#aaa';
+    
+    let html = '<div style="font-size:0.9rem; line-height:1.5;">';
+
+    if (showBatch) {
+      html += `
+      <div style="margin-bottom:6px; padding:6px; border-left:4px solid #0055aa; background:#f0f8ff;">
+        <div style="font-weight:bold; color:#0055aa;">■ 一括 (API1回)</div>
+        <div>
+           距離: <b>${fmt(batchRes.dist, 2)} km</b> / 
+           時間: <b>${fmt(batchRes.time, 1)} 分</b> / 
+           <span style="color:#d35400">EN: <b>${fmt(batchRes.energy, 0)} kJ</b></span>
+        </div>
+      </div>`;
+    }
+
+    if (showSeg) {
+      html += `
+      <div style="margin-bottom:6px; padding:6px; border-left:4px solid #aa0000; background:#fff5f5;">
+        <div style="font-weight:bold; color:#aa0000;">■ 積上 (区間合計)</div>
+        <div>
+           距離: <b>${fmt(segRes.dist, 2)} km</b> / 
+           時間: <b>${fmt(segRes.time, 1)} 分</b> / 
+           <span style="color:#d35400">EN: <b>${fmt(segRes.energy, 0)} kJ</b></span>
+        </div>
+      </div>`;
+    }
+
+    // 両方ONなら差分表示
+    if (showBatch && showSeg) {
+        html += `
+      <div style="font-size:0.85rem; color:#555; border-top:1px dashed #ccc; padding-top:4px; margin-top:4px;">
+        <b>計算誤差 (積上 - 一括):</b><br>
+        距離: <span style="color:${diffColor(segRes.dist, batchRes.dist)}">${fmt(segRes.dist - batchRes.dist, 2)} km</span> / 
+        時間: <span style="color:${diffColor(segRes.time, batchRes.time)}">${fmt(segRes.time - batchRes.time, 1)} 分</span> / 
+        EN: <span style="color:${diffColor(segRes.energy, batchRes.energy)}">${fmt(segRes.energy - batchRes.energy, 0)} kJ</span>
+      </div>`;
+    }
+    
+    html += '</div>';
+    if (infoBox) infoBox.innerHTML = html;
+
+    // マーカー再配置
+    if (typeof setComboMarkers === 'function') {
+      setComboMarkers(start, picks, goal);
+    }
+
+    // -------------------------------------------------
+    // 6. ズーム調整 (変更なし)
+    // -------------------------------------------------
+    if (typeof map !== 'undefined') {
+       const allLayers = [];
+       if (manualRouteLayerGroup) manualRouteLayerGroup.eachLayer(l => allLayers.push(l));
+       if (typeof markerLayer !== 'undefined' && markerLayer) markerLayer.eachLayer(l => allLayers.push(l));
+
+       if (allLayers.length > 0) {
+         const group = new L.featureGroup(allLayers);
+         const b = group.getBounds();
+         if (b.isValid()) map.fitBounds(b.pad(0.1));
+       }
+    }
+
+  } catch (e) {
+    console.error(e);
+    alert('エラーが発生しました:\n' + e.message);
+    if (infoBox) infoBox.textContent = 'エラー: ' + e.message;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '選択したPOIで比較描画';
+    }
+  }
+};
 </script>
 </body>
 </html>
-
-
-
-
