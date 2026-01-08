@@ -2439,7 +2439,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
   }
 
 const ideals = getIdealPerLegs();
-const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
+const idealDistPerLeg = ideals.idealDistPerLeg;     // ★ここを距離に変更
 
   const Klist = restGroups.map(g => Array.isArray(g) ? g.length : 0);
   if (Klist.some(k => !Number.isInteger(k) || k <= 0)) {
@@ -2457,9 +2457,10 @@ const idealEnergyPerLeg = ideals.idealEnergyPerLeg;
     // start → 最初のトリガー
   for (let k = 0; k < Klist[0]; k++) {
     const poi = restGroups[0][k];
-    const leg = await calcLegCostWithApi(start, poi, profile);
+const leg = await calcLegCostWithApi(start, poi, profile);
 
-const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
+// ★変更：距離(km) と 距離の理想値を使う
+const mse = legDistMseCost(leg.distKm, idealDistPerLeg); 
 dp[0][k] = mse;
 
 const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
@@ -2496,9 +2497,10 @@ recordViterbiEdge({
         const fromPoi = prevGroup[i];
         if (!Number.isFinite(dp[t - 1][i])) continue;
 
-        const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
+const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
 
-const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
+// ★変更：距離(km) と 距離の理想値を使う
+const mse = legDistMseCost(leg.distKm, idealDistPerLeg);
 
 const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
 recordViterbiEdge({
@@ -2542,9 +2544,10 @@ const cand = dp[t - 1][i] + mse;
     if (!Number.isFinite(dp[lastT][k])) continue;
 
     const poi = restGroups[lastT][k];
-    const leg = await calcLegCostWithApi(poi, goal, profile);
+const leg = await calcLegCostWithApi(poi, goal, profile);
 
-const mse = legEnergyMseCost(leg.energyKj, idealEnergyPerLeg);
+// ★変更：距離(km) と 距離の理想値を使う
+const mse = legDistMseCost(leg.distKm, idealDistPerLeg);
 
 const de = Number(leg.energyKj) - Number(idealEnergyPerLeg);
 recordViterbiEdge({
@@ -2617,7 +2620,8 @@ try {
   //   idealEnergyPerLeg
   // );
   // if (Number.isFinite(exactMse)) finalScore = exactMse;
-const exact = finalScoreFromStats(stats, { idealEnergyPerLeg });
+// ★変更：距離ベースで最終スコアを出す（finalScoreFromStatsの中身も後述の通り変更が必要）
+const exact = finalScoreFromStats(stats, ideals); 
 if (Number.isFinite(exact)) finalScore = exact;
 
 } catch (e) {
@@ -2938,8 +2942,11 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     throw new Error('組み合わせ候補が作れませんでした。');
   }
 
-  // 理想値の取得
-  const ideals = getIdealPerLegs();
+// 理想値の取得
+const ideals = getIdealPerLegs();
+  // ★変更：距離の理想値をそのまま使う
+// (getIdealPerLegs内で既に「総距離 ÷ 区間数」が計算されています)
+const idealDistPerLeg = ideals.idealDistPerLeg;
   
   // ★修正点1: 「区間ごと」の理想値を計算
   // 実際の区間数 = 休憩所数(groups) + 1 (Start->Goal間)
@@ -2971,12 +2978,12 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     try {
       const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
 
-      // ★修正点2: 計算用関数に「区間平均値」を渡す
-      // routeEnergyMseFromStats は (val - ideal)^2 を計算する関数
-      const eScore = routeEnergyMseFromStats(stats, segmentIdealEnergy);
+// ★変更：距離MSE計算関数を使う
+// routeDistMseFromStats は (区間距離 - 理想距離)^2 を計算する関数
+const distScore = routeDistMseFromStats(stats, idealDistPerLeg);
 
-      const score    = eScore;
-      const rawScore = eScore;
+const score    = distScore;
+const rawScore = distScore;
 
       results.push({
         score,            // これで小さい値（数万〜数十万）になります
@@ -4326,6 +4333,30 @@ function routeEnergyMseFromStats(stats, idealEnergyPerLeg){
   return sum / n;
 }
 
+// 【新規追加】1区間の距離コスト（MSE）: (区間距離 - 理想距離)^2
+function legDistMseCost(distKm, idealDistPerLeg){
+  const d  = Number(distKm);
+  const id = Number(idealDistPerLeg);
+  if (!Number.isFinite(d) || !Number.isFinite(id)) return Infinity;
+  const diff = d - id;
+  return diff * diff;
+}
+
+// 【新規追加】ルート全体の距離MSEを計算
+function routeDistMseFromStats(stats, idealDistPerLeg){
+  const dArr = stats && Array.isArray(stats.dist) ? stats.dist : [];
+  const n = dArr.length;
+  if (!n) return NaN;
+
+  let sum = 0;
+  for (let i = 0; i < n; i++){
+    const val = Number(dArr[i]);
+    const diff = (Number.isFinite(val) ? val : 0) - idealDistPerLeg;
+    sum += diff * diff;
+  }
+  return sum / n;
+}
+
 function defaultLinearSorter(a, b){
   const score = p =>
     (Number(p?.distFromTriggerM) || 0) +
@@ -4338,8 +4369,8 @@ function sumNums(arr){
 }
 
 function finalScoreFromStats(stats, ideals){
-  // 今の方針：レグごとの energy 均等性
-  return routeEnergyMseFromStats(stats, ideals.idealEnergyPerLeg);
+  // ★変更：距離の均等性(MSE)を返す
+  return routeDistMseFromStats(stats, ideals.idealDistPerLeg);
 }
 
 // ======================================================
@@ -4367,8 +4398,10 @@ function getIdealPerLegs(){
 // 共通：比較用のスコア（並び順・CSV・表示を一致させる）
 // stats があれば energyMSE を最優先（総当たりと同じ土俵）
 // ======================================================
-function unifiedScoreForCompare(r, idealEnergyPerLeg){
-  const e = (r && r.stats) ? routeEnergyMseFromStats(r.stats, idealEnergyPerLeg) : NaN;
+function unifiedScoreForCompare(r, _unused){ // 第2引数は使いません
+  const ideals = getIdealPerLegs(); // 理想値を再取得
+  // ★変更：距離MSEを使用
+  const e = (r && r.stats) ? routeDistMseFromStats(r.stats, ideals.idealDistPerLeg) : NaN;
   if (Number.isFinite(e)) return e;
 
   const s = Number(r && r.score);
@@ -4918,25 +4951,23 @@ function applyAutoNamesToAllPois(){
    ・S/G区間を無視して、中間のつながりが良い候補をTopK個選出
    ・最後に一括API(Batch)で正確なスコアを出して並び替え
    ========================================================== */
+/* ===== 【変更】対策G (SG排除) 距離MSE対応版 ===== */
 async function solveMeasureG(start, goal, groups, profile) {
   const T = Array.isArray(groups) ? groups.length : 0;
   if (!T) return [];
 
   // 1. 設定
   const BEAM_WIDTH = 30; // 予選通過させる候補数 (TopK)
-  const TOTAL_IDEAL_ENERGY = 1583.42; // 全体の理想エネルギー(固定値または引数)
   
-  // 区間ごとの理想値 (全区間数 = POIグループ数 + 1)
-  // S/Gを除外しても「ペース配分」は全体基準で合わせるのが正解
-  const numSegments = T + 1;
-  const idealSeg = TOTAL_IDEAL_ENERGY / numSegments;
+  // ★変更点1：距離の理想値を取得
+  const ideals = getIdealPerLegs();
+  const idealDistPerLeg = ideals.idealDistPerLeg; 
 
   // API関数 (キャッシュ対応版を想定)
   const apiFunc = calcLegCostWithApi; 
 
   // --- Step 0: Start -> Group 0 (Layer 0) ---
   // ★SG排除: スタート区間のコストは無視(=0)
-  // ここで最初のパスリストを作る
   let currentPaths = groups[0].map(poi => ({
     picks: [poi],           // 選択されたPOIのリスト
     currentCost: 0,         // コストは0スタート
@@ -4955,9 +4986,8 @@ async function solveMeasureG(start, goal, groups, profile) {
         // 区間コスト取得 (キャッシュ or API)
         const leg = await apiFunc(path.lastNode, nextPoi, profile);
         
-        // ★中間の区間なので、理想値とのズレ(MSE)を計算
-        // Physics.costMSE の代わりに直接計算
-        const diff = leg.energy_kJ - idealSeg;
+        // ★変更点2：距離(km) の理想値とのズレ(MSE)を計算
+        const diff = leg.distKm - idealDistPerLeg;
         const penalty = diff * diff;
 
         // 候補に追加
@@ -4975,9 +5005,7 @@ async function solveMeasureG(start, goal, groups, profile) {
   }
 
   // --- Last Step: Group Last -> Goal ---
-  // ★SG排除: ゴール区間のコスト計算は「しない」
-  // したがって、この時点で currentPaths に残っているのが
-  // 「中間セクションが優秀なルート候補(TopK)」になる
+  // ゴール区間のコスト計算は「しない」（中間セクション優秀ルート候補）
 
   console.log(`Algo G: 予選通過 ${currentPaths.length} 件。決勝(リランク)開始...`);
 
@@ -4991,31 +5019,31 @@ async function solveMeasureG(start, goal, groups, profile) {
     const waypoints = [start, ...candidate.picks, goal];
 
     try {
-      // ★ここで一括APIを呼び、真のスコア(Batch Score)を出す
-      // calcBatchRouteStats は修正済みのものを使用
-      const stats = await calcBatchRouteStats(waypoints, profile, TOTAL_IDEAL_ENERGY);
+      // ★変更点3：共通関数を使ってルート詳細を取得し、距離MSEで評価する
+      const out = await routeLegStatsForWaypoints(waypoints, profile);
+      
+      // 全体の距離MSEスコアを算出
+      const distScore = routeDistMseFromStats(out.stats, idealDistPerLeg);
 
       finalResults.push({
         rank: 0, // あとで埋める
-        score: stats.score, // これが最終評価値
-        rawScore: stats.rawScore,
+        score: distScore,    // ★距離MSE
+        rawScore: distScore,
         
         // ログ・CSV出力用データ
         poi_names: candidate.picks.map(p => p.name).join(' -> '),
         poi_latlngs: candidate.picks.map(p => `${p.lat},${p.lon}`).join(' | '),
-        sigmaEnergy: stats.sigmaEnergy,
-        totalEnergy: stats.totalEnergy,
-        dist: stats.dist,
-        time: stats.time,
         
-        // 描画用データ (feature)
-        // 必要なら stats から復元するか、別途構築
-        picks: candidate.picks
+        // statsの中身を展開して保存（CSV出力等で使うため）
+        sigmaEnergy: stdDev(out.stats.energy), // 参考値として残す
+        dist: out.stats.dist,
+        time: out.stats.time,
+        
+        // 描画用データ
+        picks: candidate.picks,
+        stats: out.stats
       });
       
-      // APIレートリミット対策 (少し待つ)
-      // await new Promise(r => setTimeout(r, 100));
-
     } catch (e) {
       console.warn(`Algo G: リランク失敗 (Candidate ${i})`, e);
     }
@@ -5616,3 +5644,4 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
