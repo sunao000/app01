@@ -5409,12 +5409,11 @@ function updateManualRouteUI() {
 }
 
 /* ==============================================
-   手動ルート比較機能（完全版：時間・エネルギー・差分対応）
+   【修正版】手動ルート比較機能（完全版：NaN対策済み）
    ============================================== */
-
 window.drawManualComparison = async function() {
-  console.log('[ManualRoute] ボタンクリック検知');  
-   
+  console.log('[ManualRoute] ボタンクリック検知');   
+    
   const infoBox = document.getElementById('manualRouteInfo');
   const btn = document.getElementById('btnDrawManualRoute');
   const profile = document.getElementById('profileSelect')?.value || 'cycling-road'; 
@@ -5428,9 +5427,8 @@ window.drawManualComparison = async function() {
 
   try {
     // -------------------------------------------------
-    // 1. データチェック (変更なし)
+    // 1. データチェック
     // -------------------------------------------------
-    
     let groups = [];
     if (typeof getGlobalRestGroups === 'function') {
       groups = getGlobalRestGroups();
@@ -5455,7 +5453,7 @@ window.drawManualComparison = async function() {
     }
 
     // -------------------------------------------------
-    // 2. UIから選択されたPOIを回収 (変更なし)
+    // 2. UIから選択されたPOIを回収
     // -------------------------------------------------
     const picks = [];
     for (let i = 0; i < groups.length; i++) {
@@ -5473,9 +5471,8 @@ window.drawManualComparison = async function() {
     }
 
     // -------------------------------------------------
-    // 3. 地図のリセット処理 (変更なし)
+    // 3. 地図のリセット処理
     // -------------------------------------------------
-    
     if (typeof clearRouteLayers === 'function') {
       clearRouteLayers();
     } else if (typeof routeLayers !== 'undefined') {
@@ -5500,7 +5497,7 @@ window.drawManualComparison = async function() {
     }
 
     // -------------------------------------------------
-    // 4. API計算と描画（★ここを修正★）
+    // 4. API計算と描画
     // -------------------------------------------------
     if (btn) btn.textContent = 'ルート計算中...';
     
@@ -5513,10 +5510,9 @@ window.drawManualComparison = async function() {
 
     // --- A. 一括 (Batch) ---
     if (showBatch) {
-      // 修正済み(区間理想を使う)の calcBatchRouteStats を使うのがベストですが
-      // ここでは既存の routeLegStatsForWaypoints と手動計算でやります
       const wps = [start, ...picks, goal].map(p => ({ lat: p.lat, lon: p.lon, name: p.name || 'WP' }));
       
+      // routeLegStatsForWaypoints を使用
       if (typeof routeLegStatsForWaypoints !== 'function') {
         throw new Error('関数 routeLegStatsForWaypoints が見つかりません');
       }
@@ -5531,12 +5527,12 @@ window.drawManualComparison = async function() {
         
         // ORSのsummaryから取得
         const sum = out.feature.properties.summary;
-        batchRes.dist = sum.distance / 1000; // km
-        batchRes.time = sum.duration / 60;   // min
+        batchRes.dist = (Number(sum.distance) || 0) / 1000; // km
+        batchRes.time = (Number(sum.duration) || 0) / 60;   // min
         
         // エネルギー: stats.energy の合計
         if (out.stats && Array.isArray(out.stats.energy)) {
-           batchRes.energy = out.stats.energy.reduce((a,b)=>a+b, 0);
+           batchRes.energy = out.stats.energy.reduce((a,b)=>a+(Number(b)||0), 0);
         }
       }
     }
@@ -5545,68 +5541,71 @@ window.drawManualComparison = async function() {
     if (showSeg) {
       const points = [start, ...picks, goal];
       
-      // cache対応の calcLegCostWithApi があればそれを使う（なければ dir で都度計算）
-      // ここでは、確実に動くように dir をループで呼びます（既存ロジック踏襲）
-      
       for (let i = 0; i < points.length - 1; i++) {
         const from = points[i];
         const to = points[i+1];
         
-        // API呼び出し（ヘルパーがあればそちらを推奨）
         let legEnergy = 0;
         let legDist = 0;
         let legTime = 0;
         let feature = null;
 
+        // ★ NaN対策: calcLegCostWithApi の返り値を安全に取得
         if (typeof calcLegCostWithApi === 'function') {
-           // キャッシュ対応API関数がある場合
            const leg = await calcLegCostWithApi(from, to, profile);
-           legEnergy = leg.energy_kJ;
-           legDist   = leg.dist_km * 1000; // mに戻す
-           legTime   = leg.time_min * 60;  // secに戻す
-           // Featureが必要なら別途取得、または calcLegCostWithApi が返すなら使う
-           // ここでは描画用に dir を再取得するか、API関数の仕様に合わせる
-           // (簡易的に dir を呼び直して描画します)
+           
+           // 新旧どちらのプロパティ名でも対応できるように安全策をとる
+           const e = leg.energyKj ?? leg.energy_kJ;
+           const d = leg.distKm   ?? leg.dist_km;
+           const t = leg.timeMin  ?? leg.time_min;
+
+           legEnergy = Number(e) || 0;
+           legDist   = (Number(d) || 0) * 1000; // mに戻す
+           legTime   = (Number(t) || 0) * 60;   // secに戻す
+
+           // 描画用に Feature が欲しいので dir を呼ぶ（ここは描画だけなので簡易呼び出し）
            const res = await dir({ coordinates: [[from.lon, from.lat], [to.lon, to.lat]], elevation:true }, profile);
            feature = res.features[0];
+
         } else {
-           // 直接 dir を呼ぶ場合
+           // calcLegCostWithApi がない場合のフォールバック（直接 dir）
            const coords = [[from.lon, from.lat], [to.lon, to.lat]];
            const res = await dir({ coordinates: coords, elevation: true }, profile);
            if (!res || !res.features || !res.features[0]) throw new Error(`区間${i+1}取得失敗`);
            
            feature = res.features[0];
            const sum = feature.properties.summary;
-           legDist = sum.distance;
-           legTime = sum.duration;
+           legDist = Number(sum.distance) || 0;
+           legTime = Number(sum.duration) || 0;
            
-           // エネルギー計算（既存関数があれば利用）
-           // なければ簡易計算: Physics.calcEnergy or 0
-           if (typeof calculateEnergy === 'function') {
-               const eData = calculateEnergy(feature.properties.segments[0], 0); // 第2引数は累積距離
-               legEnergy = eData.energy_kJ;
-           } else {
-               // ※ここにあなたのエネルギー計算式を入れてください
-               legEnergy = 0; 
+           // エネルギー簡易計算
+           if (typeof energyStepKJ === 'function') {
+               // 簡易的な総エネルギー計算（featureから）
+               // もし totalEnergyKJ 関数があればそれを使う
+               if(typeof totalEnergyKJ === 'function') {
+                   legEnergy = await totalEnergyKJ(feature, 75, 18);
+               } else {
+                   legEnergy = 0; 
+               }
            }
         }
 
-        // 赤点線
+        // 赤点線描画
         if (feature) {
             L.geoJSON(feature, {
               style: { color: '#aa0000', weight: 4, dashArray: '10, 10', opacity: 1.0 }
             }).bindTooltip(`区間 ${i+1}`).addTo(manualRouteLayerGroup);
         }
 
-        segRes.dist += legDist / 1000; // km
-        segRes.time += legTime / 60;   // min
-        segRes.energy += legEnergy;
+        segRes.dist += legDist / 1000; // m -> km
+        segRes.time += legTime / 60;   // s -> min
+        segRes.energy += legEnergy;    // kJ
         segRes.count++;
       }
     }
 
     // -------------------------------------------------
-    // 5. 結果表示 (HTML生成) ★ここがメイン
+    // 5. 結果表示 (HTML生成)
     // -------------------------------------------------
     const fmt = (n, d=1) => Number(n).toFixed(d);
     const diffColor = (a, b) => (Math.abs(a - b) > 0.1) ? '#e00' : '#aaa';
@@ -5657,7 +5656,7 @@ window.drawManualComparison = async function() {
     }
 
     // -------------------------------------------------
-    // 6. ズーム調整 (変更なし)
+    // 6. ズーム調整
     // -------------------------------------------------
     if (typeof map !== 'undefined') {
        const allLayers = [];
@@ -5685,6 +5684,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
