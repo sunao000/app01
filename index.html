@@ -2430,6 +2430,7 @@ if (Array.isArray(ene) && ene.length) {
 // start, goal: {lat, lon} 形式
 // restGroups: [ [POI, POI, ...], [POI, ...], ... ] 各トリガーごとの候補POI
 // profile: 'cycling-road' など
+/* ===== 【修正版】runViterbiOnce_API (距離MSE完全対応・エラー修正済み) ===== */
 async function runViterbiOnce_API(start, goal, restGroups, profile) {
 
   const T = Array.isArray(restGroups) ? restGroups.length : 0;
@@ -2438,7 +2439,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     return [];
   }
 
-  // ★変更1: 距離の理想値を取得
+  // ★距離の理想値を取得
   const ideals = getIdealPerLegs();
   const idealDistPerLeg = ideals.idealDistPerLeg;
 
@@ -2460,11 +2461,11 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     const poi = restGroups[0][k];
     const leg = await calcLegCostWithApi(start, poi, profile);
 
-    // ★変更2: 距離MSEを計算
+    // ★距離MSEを計算
     const mse = legDistMseCost(leg.distKm, idealDistPerLeg);
     dp[0][k] = mse;
 
-    // ★変更3: エッジ記録からエネルギー差分(de)の計算を削除し、コストとして距離MSEを記録
+    // ★修正: エネルギー計算(de, idealEnergyPerLeg)を削除
     recordViterbiEdge({
       t: 0,
       fromIdx: -1,
@@ -2476,10 +2477,8 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
       distKm: leg.distKm,
       timeMin: leg.timeMin,
       energyKj: leg.energyKj,
-      // idealEnergyPerLeg: ... (削除)
-      // deEnergyKj: ... (削除)
       cost: mse,      // コストとしてMSEを保存
-      mseDist: mse    // 明示的に距離MSEとして保存
+      mseDist: mse
     });
   }
 
@@ -2499,7 +2498,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
 
         const leg = await calcLegCostWithApi(fromPoi, toPoi, profile);
 
-        // ★変更4: 距離MSEを計算
+        // ★距離MSEを計算
         const mse = legDistMseCost(leg.distKm, idealDistPerLeg);
         
         recordViterbiEdge({
@@ -2513,7 +2512,6 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
           distKm: leg.distKm,
           timeMin: leg.timeMin,
           energyKj: leg.energyKj,
-          // idealEnergyPerLeg: ... (削除)
           cost: mse,
           mseDist: mse,
           prevDp: dp[t-1][i],
@@ -2543,7 +2541,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     const poi = restGroups[lastT][k];
     const leg = await calcLegCostWithApi(poi, goal, profile);
 
-    // ★変更5: 距離MSEを計算
+    // ★距離MSEを計算
     const mse = legDistMseCost(leg.distKm, idealDistPerLeg);
 
     recordViterbiEdge({
@@ -2557,7 +2555,6 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
       distKm: leg.distKm,
       timeMin: leg.timeMin,
       energyKj: leg.energyKj,
-      // idealEnergyPerLeg: ... (削除)
       cost: mse,
       mseDist: mse,
       prevDp: dp[lastT][k],
@@ -2607,7 +2604,7 @@ async function runViterbiOnce_API(start, goal, restGroups, profile) {
     feature = out?.feature || null;
     if (out?.stats) stats = out.stats;
 
-    // ★変更6: 最終スコアも距離MSEで計算 (finalScoreFromStatsは修正済み前提)
+    // ★最終スコアも距離MSEで計算
     const exact = finalScoreFromStats(stats, ideals); 
     if (Number.isFinite(exact)) finalScore = exact;
 
@@ -3482,7 +3479,7 @@ async function runAlgoCompareDebug(){
       await waitApi(3000);
     }
 
-    /* ---------- 【修正版】対策G: SG排除 + Viterbi ---------- */
+/* ---------- 【修正版】対策G: SG排除 + Viterbi ---------- */
     if (isAlgoEnabled('dbg_G') || true) { 
       const t0 = performance.now();
       try {
@@ -3490,12 +3487,16 @@ async function runAlgoCompareDebug(){
         // (groupsCがあればそれを優先。なければ vitGroups を使うが、未定義ならここで作る)
         let targetGroups = null;
 
+        // groupsC の存在チェック
         if (typeof groupsC !== 'undefined' && groupsC && groupsC.length) {
           targetGroups = groupsC;
-        } else if (typeof vitGroups !== 'undefined' && vitGroups && vitGroups.length) {
+        } 
+        // vitGroups の存在チェック (ここがエラーの原因だったので修正)
+        else if (typeof vitGroups !== 'undefined' && vitGroups && vitGroups.length) {
           targetGroups = vitGroups;
-        } else {
-          // どちらも無い場合は新規作成
+        } 
+        // どちらも無い場合は新規作成
+        else {
           const cap = Math.max(1, Number($('poiLimit')?.value) || 5);
           targetGroups = makeCandGroupsFromRestGroups(restGroups, cap);
         }
@@ -3510,8 +3511,8 @@ async function runAlgoCompareDebug(){
         console.error('Algo G fail:', e);
         panel.textContent += '\n[対策G エラー] ' + (e.message || e) + '\n';
       }
-      // ★API休憩
-      await waitApi(3000); 
+      // ★API休憩を入れる
+      if(typeof waitApi === 'function') await waitApi(3000); 
     }
 
     // ----------------------------------------------------------
@@ -5663,6 +5664,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
