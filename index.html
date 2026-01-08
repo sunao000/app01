@@ -3479,24 +3479,24 @@ async function runAlgoCompareDebug(){
       await waitApi(3000);
     }
 
-/* ---------- 【修正版】対策G: SG排除 + Viterbi ---------- */
+/* ---------- 【修正版】対策G: SG排除 + Viterbi (UI表示・順位対応) ---------- */
     if (isAlgoEnabled('dbg_G') || true) { 
+      // 見出しを表示
+      panel.textContent += '\n--- 対策G：SG排除 + Viterbi (距離MSE) ---\n';
+
+      const orsBefore = API_USED.orsTotal;
+      const ovpBefore = API_USED.overpassTotal;
       const t0 = performance.now();
+
       try {
         // 1. ターゲットとなるグループを決める
-        // (groupsCがあればそれを優先。なければ vitGroups を使うが、未定義ならここで作る)
         let targetGroups = null;
 
-        // groupsC の存在チェック
         if (typeof groupsC !== 'undefined' && groupsC && groupsC.length) {
           targetGroups = groupsC;
-        } 
-        // vitGroups の存在チェック (ここがエラーの原因だったので修正)
-        else if (typeof vitGroups !== 'undefined' && vitGroups && vitGroups.length) {
+        } else if (typeof vitGroups !== 'undefined' && vitGroups && vitGroups.length) {
           targetGroups = vitGroups;
-        } 
-        // どちらも無い場合は新規作成
-        else {
+        } else {
           const cap = Math.max(1, Number($('poiLimit')?.value) || 5);
           targetGroups = makeCandGroupsFromRestGroups(restGroups, cap);
         }
@@ -3505,14 +3505,35 @@ async function runAlgoCompareDebug(){
         const gList = await solveMeasureG(start, goal, targetGroups, profile);
         
         const t1 = performance.now();
-        pushAlgoResultsForCsv('G', 'SG排除+Viterbi', gList, t1 - t0, -1, 0);
+        const ms = t1 - t0;
+        const ors = API_USED.orsTotal - orsBefore;
+        const ov  = API_USED.overpassTotal - ovpBefore;
+
+        if (!gList || !gList.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          // ★追加1: 総当たり結果(bfRankMap)との照合を行い、順位を付与する
+          attachBfRank(gList, bfRankMap);
+
+          // ★追加2: 処理時間などをパネルに表示
+          panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+          panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+          panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+          // ★追加3: 結果リストをパネルに表示 (これで他のと同じ見た目になります)
+          showAlgoListInPanel(panel, gList.slice(0, 3), 'measure_G');
+
+          // CSV用データ蓄積
+          pushAlgoResultsForCsv('G', 'SG排除+Viterbi', gList, ms, ors, ov);
+        }
 
       } catch (e) {
         console.error('Algo G fail:', e);
         panel.textContent += '\n[対策G エラー] ' + (e.message || e) + '\n';
       }
-      // ★API休憩を入れる
-      if(typeof waitApi === 'function') await waitApi(3000); 
+      
+      // ★API休憩
+      if(typeof waitApi === 'function') await waitApi(5000); 
     }
 
     // ----------------------------------------------------------
@@ -5664,6 +5685,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
