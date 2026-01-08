@@ -3625,22 +3625,30 @@ async function showLinearComboRoute(row){
   setActiveButton(null);
 }
 
+/* ===== 【変更】CSV出力用データ蓄積（距離MSE対応） ===== */
 function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls, overpassCalls){
   if (!Array.isArray(resultList) || !resultList.length) return;
   if (!Array.isArray(window.__algoCompareRows)) window.__algoCompareRows = [];
 
+  // ★念のため理想値を取得（sortResultsByUnifiedScore内で使われます）
   const ideals = getIdealPerLegs();
-  const sorted = sortResultsByUnifiedScore(resultList, ideals.idealEnergyPerLeg);
+
+  // ★重要：ここで「距離MSE」のスコアが良い順に並び替えられます
+  // (sortResultsByUnifiedScore が unifiedScoreForCompare を呼ぶため)
+  const sorted = sortResultsByUnifiedScore(resultList, null);
 
   sorted.forEach((r, idx)=>{
-    const rank = idx + 1;
+    const rank = idx + 1; // これがExcelの順位になります
 
+    // 統計値（参考情報として出力）
     const sigmaDist   = stdDev(r.stats && r.stats.dist ? r.stats.dist : []);
     const sigmaTime   = stdDev(r.stats && r.stats.time ? r.stats.time : []);
     const sigmaEnergy = stdDev(r.stats && r.stats.energy ? r.stats.energy : []);
 
-    const scoreForCsv = unifiedScoreForCompare(r, ideals.idealEnergyPerLeg);
+    // ★変更：CSVに出るスコアも「距離MSE」で統一
+    const scoreForCsv = unifiedScoreForCompare(r, null);
 
+    // POI名の整形
     let poiList = (r.picks || r.picksByTrigger || []).filter(Boolean);
     if (Array.isArray(poiList[0])) poiList = poiList.flat().filter(Boolean);
 
@@ -3653,9 +3661,9 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
     window.__algoCompareRows.push({
       algo: algoCode,
       label,
-      rank,
-      bfRank: (r.bfRank ?? ''),
-      score: scoreForCsv,
+      rank,                   // 距離MSE順のランク
+      bfRank: (r.bfRank ?? ''), // 総当たりでのランク（総当たりも距離MSE化済みならOK）
+      score: scoreForCsv,     // 距離MSEスコア
       rawScore: r.rawScore,
       sigmaDist,
       sigmaTime,
@@ -5644,4 +5652,5 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
