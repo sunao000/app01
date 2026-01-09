@@ -2976,68 +2976,71 @@ async function viterbiRouteCost(p1, p2, profile){
   return { dist, time, energy };
 }
 
-/* ====== 総当たり (runBruteforceOnce) 修正版 ====== */
+/* ===== 【修正版】総当たり (区間単位で正しく評価する版) ===== */
 async function runBruteforceOnce(start, goal, restGroups, profile){
-  // 休憩トリガーごとの POI を取得（poiLimit まで）
+  // 休憩トリガーごとの POI を取得
   const perGroupLimit = Math.max(1, Number($('poiLimit').value) || 5);
   const poiGroups = restGroups.map(g => Array.isArray(g.pois) ? g.pois : []);
 
-  // POI を perGroupLimit で頭から切り出して、総当たり用のグループに変換
+  // 組み合わせ作成
   const combos = enumerateCombinations(poiGroups, perGroupLimit);
-  if (!combos.length){
+  if (!combos.length) {
     throw new Error('組み合わせ候補が作れませんでした。');
   }
 
-// 理想値の取得
-const ideals = getIdealPerLegs();
-  // ★変更：距離の理想値をそのまま使う
-// (getIdealPerLegs内で既に「総距離 ÷ 区間数」が計算されています)
-const idealDistPerLeg = ideals.idealDistPerLeg;
-  
-  // ★修正点1: 「区間ごと」の理想値を計算
-  // 実際の区間数 = 休憩所数(groups) + 1 (Start->Goal間)
-  // ※ null(スキップ)がある場合、本来は区間数が減りますが、
-  //   現在のcombosロジックは「全トリガーから選ぶ」前提のようなので、
-  //   ここでは restGroups.length + 1 で割ります。
-  
-  const T = restGroups.length;
-  const numLegs = T + 1; // Start->P1->...->Goal の区間数
-  
-  const totalIdealEnergy = ideals.idealEnergyPerLeg; // 全体合計値
-  const segmentIdealEnergy = totalIdealEnergy / numLegs; // ★区間平均値
+  // 理想距離（例: 全体100km ÷ 4区間 = 25km）
+  const ideals = getIdealPerLegs();
+  const idealDistPerLeg = ideals.idealDistPerLeg; 
 
   const results = [];
   let okCount = 0;
   let failCount = 0;
 
   for (const cmb of combos){
-    // cmb は 「トリガーごとの選択（null 含む）」配列
-    const picks = cmb.filter(Boolean); // null は除外して実際の経由地だけにする
-
-    // ORS に渡すウェイポイント列（start → picks... → goal）
+    const picks = cmb.filter(Boolean);
     const wps = [start, ...picks, goal].map(p => ({
-      lat: p.lat,
-      lon: p.lon,
-      name: p.name || 'POI'
+      lat: p.lat, lon: p.lon, name: p.name || 'POI'
     }));
 
     try {
+      // API呼び出し（一括計算）
       const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
 
-// ★変更：距離MSE計算関数を使う
-// routeDistMseFromStats は (区間距離 - 理想距離)^2 を計算する関数
-const distScore = routeDistMseFromStats(stats, idealDistPerLeg);
+      let distScore = 0;
+      
+      // ▼▼▼▼▼ ここが修正の核心 ▼▼▼▼▼
+      // stats(細かいステップ)ではなく、feature.properties.segments(区間)を使う
+      const segments = feature?.properties?.segments || [];
+      
+      if (segments.length > 0) {
+        let sumSq = 0;
+        segments.forEach(seg => {
+          // APIの単位はメートルなので km に直す
+          const dKm = (Number(seg.distance) || 0) / 1000;
+          
+          // (区間距離 - 理想距離) の二乗
+          const diff = dKm - idealDistPerLeg;
+          sumSq += diff * diff;
+        });
+        // 平均二乗誤差 (MSE)
+        distScore = sumSq / segments.length;
 
-const score    = distScore;
-const rawScore = distScore;
+      } else {
+        // 万が一 segments がない場合（基本ありえないが念のため）
+        distScore = Infinity;
+      }
+      // ▲▲▲▲▲ 修正ここまで ▲▲▲▲▲
+
+      const score = distScore;
+      const rawScore = distScore;
 
       results.push({
-        score,            // これで小さい値（数万〜数十万）になります
-        rawScore,        
-        feature,          
-        picks,            
-        picksByTrigger: cmb, 
-        stats            
+        score,        // これで正しい「距離のバラつき具合」になります
+        rawScore,
+        feature,
+        picks,
+        picksByTrigger: cmb,
+        stats
       });
       okCount++;
     } catch (e){
@@ -3046,18 +3049,14 @@ const rawScore = distScore;
     }
   }
 
-  // スコア昇順に並べ替え
+  // スコアが良い（小さい）順に並べる
   results.sort((a,b)=>a.score - b.score);
 
-  console.log(
-    '[runBruteforceOnce] ok=', okCount,
-    ' fail=', failCount,
-    ' results=', results.length
-  );
+  console.log('[runBruteforceOnce] ok=', okCount, ' fail=', failCount, ' results=', results.length);
 
   return results;
 }
-
+  
 // ======================================================
 // アルゴリズム比較デバッグ本体
 //   - ビームサーチ（ゼロAPI）
@@ -5929,6 +5928,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
