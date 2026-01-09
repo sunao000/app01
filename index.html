@@ -1104,11 +1104,9 @@ async function dir(body, profile) {
   }
 }
 
-// ▼▼▼ ここからコピーして上書き ▼▼▼
-
-// 待機用ヘルパー（指定ミリ秒待つ関数）
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
+/* ==============================================
+   【修正版】API呼び出し関数（重複エラー対策済み）
+   ============================================== */
 async function post(url, body) {
   const MAX_RETRIES = 5; // 最大5回まで再挑戦
   let delay = 5000;      // 初回は5秒待つ
@@ -1132,6 +1130,7 @@ async function post(url, body) {
       // 429 (Too Many Requests) の場合 -> 待機してリトライ
       if (r.status === 429) {
         console.warn(`[API] 429 Rate Limit detected. Waiting ${delay/1000}s... (Retry ${i+1}/${MAX_RETRIES})`);
+        // 既存の sleep 関数を使います
         await sleep(delay);
         delay *= 2; // 待機時間を倍に増やす (5s -> 10s -> 20s...)
         continue;   // ループの先頭に戻ってやり直す
@@ -1157,6 +1156,7 @@ async function post(url, body) {
       }
       
       console.warn(`[API] Network or Fetch error. Waiting ${delay/1000}s...`, e);
+      // 既存の sleep 関数を使います
       await sleep(delay);
       delay *= 2;
     }
@@ -1164,7 +1164,7 @@ async function post(url, body) {
 
   throw new Error(`API Retry limit exceeded after ${MAX_RETRIES} attempts.`);
 }
-// ▲▲▲ ここまで ▲▲▲
+
 // async function post(url, body) {
 //   const r = await fetch(url, {
 //     method: 'POST',
@@ -5756,6 +5756,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
