@@ -2976,6 +2976,27 @@ async function viterbiRouteCost(p1, p2, profile){
   return { dist, time, energy };
 }
 
+/* ==========================================================
+   【重要】区間データ(Segments)から正しくMSEスコアを計算する関数
+   stats(細かいステップ)を使うと値が狂うため、必ずこれを使う
+   ========================================================== */
+function calcDistMseFromFeature(feature, idealDistPerLeg) {
+  const segments = feature?.properties?.segments || [];
+  
+  if (!segments || segments.length === 0) {
+    return Infinity; // データがない場合は最悪値
+  }
+
+  let sumSq = 0;
+  segments.forEach(seg => {
+    // APIの単位はmなのでkmに変換
+    const dKm = (Number(seg.distance) || 0) / 1000;
+    const diff = dKm - idealDistPerLeg;
+    sumSq += diff * diff;
+  });
+
+  return sumSq / segments.length;
+}
 /* ===== 【修正版】総当たり (区間単位で正しく評価する版) ===== */
 async function runBruteforceOnce(start, goal, restGroups, profile){
   // 休憩トリガーごとの POI を取得
@@ -4462,13 +4483,43 @@ async function runViterbiTopK_Rerank_API_Dedupe(start, goal, restGroups, profile
   });
 }
 
-// ---- 対策A(全件)：TopKを総量MSEで再ランキング（全件返す・重複排除なし） ----
-async function runViterbiTopK_Rerank_All_API(start, goal, restGroups, profile, opt = {}){
+/* ===== 【修正版】対策A/B共通 (TopK Rerank) ===== */
+async function runViterbiTopK_Rerank_All_API(start, goal, restGroups, profile, opt) {
+  // 1. 候補生成（ビームサーチやViterbiで候補を出す）
   const topKList = await runViterbiTopK_API(start, goal, restGroups, profile, opt);
-  return await rerankTopKCandsByExactScore(start, goal, topKList, profile, {
-    dedupe: false,
-    returnAll: true
-  });
+  
+  if (!topKList.length) return [];
+
+  const ideals = getIdealPerLegs();
+  const idealDistPerLeg = ideals.idealDistPerLeg;
+  const results = [];
+
+  // 2. 再計算ループ
+  for (const item of topKList) {
+    const wps = [start, ...item.picks, goal].map(p => ({
+      lat: p.lat, lon: p.lon, name: p.name||'POI'
+    }));
+
+    try {
+      const { feature, stats } = await routeLegStatsForWaypoints(wps, profile);
+      
+      // ★修正: ヘルパー関数で正しく計算
+      const distScore = calcDistMseFromFeature(feature, idealDistPerLeg);
+
+      results.push({
+        score: distScore,
+        rawScore: distScore,
+        feature,
+        stats,
+        picks: item.picks
+      });
+    } catch(e) {
+      console.warn('Rerank API fail', e);
+    }
+  }
+
+  results.sort((a, b) => a.score - b.score);
+  return results;
 }
 
 function routeEnergyMseFromStats(stats, idealEnergyPerLeg){
@@ -5062,16 +5113,51 @@ async function runViterbiOnce_API_E_Cached(start, goal, restGroups, profile){
 //   - TopK生成は近似（ビーム）
 //   - 最終順位は routeLegStatsForWaypoints の1回呼びで確定
 // ======================================================
-async function runViterbi_F_TopN_ThenFullORS(start, goal, groups, profile, opt = {}){
-  // 1) 近似でTopK候補（ビーム）
-  const topKList = await runViterbiTopK_API(start, goal, groups, profile, opt);
+/* ===== 【修正版】対策F (TopN -> Full ORS Rerank) ===== */
+async function runViterbi_F_TopN_ThenFullORS(start, goal, restGroups, profile, opt) {
+  // 1. まずViterbi等で粗い候補(TopK)を出す
+  // (ここは既存の runViterbiTopK_API などを利用している想定)
+  const topKList = await runViterbiTopK_API(start, goal, restGroups, profile, opt);
+  
+  if (!topKList || !topKList.length) return [];
 
-  // 2) 一気に経由地付きORSで再評価（既存）
-  // returnAll=true にすると “再評価済み一覧” が取れる
-  return await rerankTopKCandsByExactScore(start, goal, topKList, profile, {
-    dedupe: true,
-    returnAll: true
-  });
+  const ideals = getIdealPerLegs();
+  const idealDistPerLeg = ideals.idealDistPerLeg;
+
+  const results = [];
+
+  // 2. 上位候補に対して、正確な一括ルート計算を行う
+  for (const cand of topKList) {
+    const picks = cand.picks;
+    const waypoints = [start, ...picks, goal].map(p => ({
+      lat: p.lat, lon: p.lon, name: p.name || 'POI'
+    }));
+
+    try {
+      // API呼び出し
+      const {feature, stats} = await routeLegStatsForWaypoints(waypoints, profile);
+      
+      // ★修正: ヘルパー関数で正しく計算
+      const distScore = calcDistMseFromFeature(feature, idealDistPerLeg);
+
+      results.push({
+        score: distScore,     // 正しいMSE
+        rawScore: distScore,
+        feature,
+        picks,
+        stats,
+        // 元のViterbiスコアも参考用に残す
+        prevScore: cand.score 
+      });
+
+    } catch (e) {
+      console.warn('Algo F: rerank fail', e);
+    }
+  }
+
+  // ソート
+  results.sort((a, b) => a.score - b.score);
+  return results;
 }
 
 function isAlgoEnabled(id){
@@ -5928,6 +6014,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
