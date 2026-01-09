@@ -4407,15 +4407,14 @@ function comboKeyFromPicksByTrigger(picksByTrigger, decimals = 6){
 
 /* ==========================================================
    【修正版】共通ヘルパー：POIリストから一意なキーを作る
-   ・数値/文字列の違いや、計算誤差(0.0000001ズレ)を吸収するため、
-     必ず数値化して toFixed(5) で丸める
+   ・数値変換とtoFixed(5)で、表記揺れと計算誤差を完全に吸収する
    ========================================================== */
 function makeRouteKey(picks) {
   if (!Array.isArray(picks)) return '';
   return picks.map(p => {
     if (!p) return 'null';
-    // 強制的に数値化してから、小数点5桁（約1m精度）の文字列に揃える
-    // これで "135.1" と "135.100000" が同じキーになる
+    // 強制的に数値化し、小数点5桁（約1m精度）で文字列化
+    // これで "35.1" と "35.10000001" を同一視させる
     const lat = Number(p.lat).toFixed(5);
     const lon = Number(p.lon).toFixed(5);
     return `${lat},${lon}`;
@@ -4450,22 +4449,34 @@ function buildBfRankMap(bfList) {
 }
 
 /* ==========================================================
-   任意アルゴ結果に bfRank を付与
+   【修正版】ランク付与 ＋ 強制並べ替え
+   ・ランクをつけた後、リスト自体を「ランク順」に並べ直して返す
    ========================================================== */
 function attachBfRank(resultList, bfRankMap) {
   if (!bfRankMap || !(bfRankMap instanceof Map)) return resultList;
   if (!Array.isArray(resultList)) return resultList;
 
+  // 1. ランクを付与
   resultList.forEach(r => {
-    // ここでも同じロジックでキーを作る
     const key = makeRouteKey(r.picks);
-    
-    // マップから順位を取得
     if (bfRankMap.has(key)) {
-      r.bfRank = bfRankMap.get(key); // 数値 (例: 1, 47)
+      r.bfRank = bfRankMap.get(key); // 数値 (1, 2, 47...)
     } else {
-      r.bfRank = '-'; // マッチしなかった場合
+      r.bfRank = 999999; // 見つからない場合は一番後ろへ
     }
+  });
+  
+  // 2. ★ここで強制的に「ランク順」に並べ替える
+  // これにより「リストの見た目」と「ランク番号」が必ず一致する
+  resultList.sort((a, b) => {
+    const rA = Number(a.bfRank) || 999999;
+    const rB = Number(b.bfRank) || 999999;
+    return rA - rB;
+  });
+
+  // 見つからなかったものの表示を '-' に戻す
+  resultList.forEach(r => {
+    if (r.bfRank === 999999) r.bfRank = '-';
   });
   
   return resultList;
@@ -6056,6 +6067,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
