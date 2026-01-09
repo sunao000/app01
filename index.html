@@ -3070,14 +3070,17 @@ async function runBruteforceOnce(start, goal, restGroups, profile){
     }
   }
 
-  // スコアが良い（小さい）順に並べる
-  results.sort((a,b)=>a.score - b.score);
+// スコアが小さい順（昇順）。NaNやInfinityは一番後ろへ。
+  results.sort((a, b) => {
+    const sA = Number.isFinite(a.score) ? a.score : Number.MAX_VALUE;
+    const sB = Number.isFinite(b.score) ? b.score : Number.MAX_VALUE;
+    return sA - sB;
+  });
 
   console.log('[runBruteforceOnce] ok=', okCount, ' fail=', failCount, ' results=', results.length);
 
   return results;
 }
-  
 // ======================================================
 // アルゴリズム比較デバッグ本体
 //   - ビームサーチ（ゼロAPI）
@@ -4402,30 +4405,56 @@ function comboKeyFromPicksByTrigger(picksByTrigger, decimals = 6){
   }).join('||');
 }
 
-// bfList（総当たり結果）から rank マップを作る
-function buildBfRankMap(bfList){
+  /* ==========================================================
+   共通ヘルパー：POIリストから一意なキー（緯度経度）を作る
+   どのアルゴリズムも必ず「picks（経由地リスト）」を持っているのでこれを使う
+   ========================================================== */
+function makeRouteKey(picks) {
+  if (!Array.isArray(picks)) return '';
+  return picks.map(p => {
+    // 念のためpが存在するか確認
+    if (!p) return 'null';
+    // 緯度経度を連結（小数点以下が微妙に違う場合を考慮して丸めても良いが、同一データならそのままでOK）
+    return `${p.lat},${p.lon}`;
+  }).join('|');
+}
+/* ==========================================================
+   bfList（総当たり結果）から rank マップを作る
+   ========================================================== */
+function buildBfRankMap(bfList) {
   const map = new Map();
-  (bfList || []).forEach((r, idx)=>{
-    const key = comboKeyFromPicksByTrigger(r.picksByTrigger);
-    // 同一キーが複数出ても「最上位」を採用
-    if(!map.has(key)) map.set(key, idx + 1);
+  // リストは既に runBruteforceOnce 内で正しくソートされている前提
+  (bfList || []).forEach((r, idx) => {
+    // picks（実際の経由地）を使ってキーを作る
+    const key = makeRouteKey(r.picks);
+    
+    // 同じルートが重複していた場合は、より上位（最初に出た方）を採用
+    if (!map.has(key)) {
+      map.set(key, idx + 1);
+    }
   });
   return map;
 }
 
-// 任意アルゴ結果に bfRank を付与（見つからなければ null）
-function attachBfRank(resultList, bfRankMap){
-  if(!bfRankMap || !(bfRankMap instanceof Map)) return resultList;
-  if(!Array.isArray(resultList)) return resultList;
+/* ==========================================================
+   任意アルゴ結果に bfRank を付与
+   ========================================================== */
+function attachBfRank(resultList, bfRankMap) {
+  if (!bfRankMap || !(bfRankMap instanceof Map)) return resultList;
+  if (!Array.isArray(resultList)) return resultList;
 
-  resultList.forEach(r=>{
-    const pbt = Array.isArray(r.picksByTrigger) ? r.picksByTrigger
-              : Array.isArray(r.picks) ? r.picks
-              : null;
-
-    const key = pbt ? comboKeyFromPicksByTrigger(pbt) : 'bad';
-    r.bfRank = bfRankMap.has(key) ? bfRankMap.get(key) : null;
+  resultList.forEach(r => {
+    // ここでも同じロジックでキーを作る
+    const key = makeRouteKey(r.picks);
+    
+    // マップから順位を取得
+    if (bfRankMap.has(key)) {
+      r.bfRank = bfRankMap.get(key); // 数値 (例: 1, 47)
+    } else {
+      r.bfRank = '-'; // マッチしなかった場合
+    }
   });
+  
   return resultList;
 }
 
@@ -6014,6 +6043,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
