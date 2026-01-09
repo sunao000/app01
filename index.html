@@ -4405,34 +4405,47 @@ function comboKeyFromPicksByTrigger(picksByTrigger, decimals = 6){
   }).join('||');
 }
 
-  /* ==========================================================
-   共通ヘルパー：POIリストから一意なキー（緯度経度）を作る
-   どのアルゴリズムも必ず「picks（経由地リスト）」を持っているのでこれを使う
+/* ==========================================================
+   【修正版】共通ヘルパー：POIリストから一意なキーを作る
+   ・数値/文字列の違いや、計算誤差(0.0000001ズレ)を吸収するため、
+     必ず数値化して toFixed(5) で丸める
    ========================================================== */
 function makeRouteKey(picks) {
   if (!Array.isArray(picks)) return '';
   return picks.map(p => {
-    // 念のためpが存在するか確認
     if (!p) return 'null';
-    // 緯度経度を連結（小数点以下が微妙に違う場合を考慮して丸めても良いが、同一データならそのままでOK）
-    return `${p.lat},${p.lon}`;
+    // 強制的に数値化してから、小数点5桁（約1m精度）の文字列に揃える
+    // これで "135.1" と "135.100000" が同じキーになる
+    const lat = Number(p.lat).toFixed(5);
+    const lon = Number(p.lon).toFixed(5);
+    return `${lat},${lon}`;
   }).join('|');
 }
+  
 /* ==========================================================
    bfList（総当たり結果）から rank マップを作る
    ========================================================== */
 function buildBfRankMap(bfList) {
   const map = new Map();
+  let count = 0;
+  
   // リストは既に runBruteforceOnce 内で正しくソートされている前提
   (bfList || []).forEach((r, idx) => {
-    // picks（実際の経由地）を使ってキーを作る
     const key = makeRouteKey(r.picks);
     
-    // 同じルートが重複していた場合は、より上位（最初に出た方）を採用
+    // 同じルートが重複していた場合は、より上位（最初に出た方=スコアが良い方）を採用
     if (!map.has(key)) {
-      map.set(key, idx + 1);
+      const rank = idx + 1;
+      map.set(key, rank);
+      
+      // デバッグ: 1位の情報をコンソールに出す
+      if (rank === 1) {
+        console.log(`[BfRank] Rank 1 Key generated: ${key}`);
+      }
+      count++;
     }
   });
+  console.log(`[BfRank] Map built with ${count} unique routes.`);
   return map;
 }
 
@@ -6043,6 +6056,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
