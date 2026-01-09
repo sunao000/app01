@@ -229,6 +229,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 <label><input type="checkbox" id="dbg_E" checked> 対策E</label>
 <label><input type="checkbox" id="dbg_F" checked> 対策F</label>
 <label><input type="checkbox" id="dbg_G" checked> 対策G</label>
+<label><input type="checkbox" id="dbg_H" checked> 対策H</label>
 
 <label style="display:inline-flex;align-items:center;gap:6px">
   A/B beamWidth
@@ -3597,6 +3598,56 @@ async function runAlgoCompareDebug(){
       if(typeof waitApi === 'function') await waitApi(5000); 
     }
 
+    /* ---------- 【追加】対策H: SG排除 + Viterbi (DP完全版) ---------- */
+    if (isAlgoEnabled('dbg_H')) { 
+      panel.textContent += '\n--- 対策H：SG排除 + Viterbi (各POI最適維持) ---\n';
+
+      const orsBefore = API_USED.orsTotal;
+      const ovpBefore = API_USED.overpassTotal;
+      const t0 = performance.now();
+
+      try {
+        // グループ準備（Gと同じロジック）
+        let targetGroups = null;
+        if (typeof groupsC !== 'undefined' && groupsC && groupsC.length) {
+          targetGroups = groupsC;
+        } else if (typeof vitGroups !== 'undefined' && vitGroups && vitGroups.length) {
+          targetGroups = vitGroups;
+        } else {
+          const cap = Math.max(1, Number($('poiLimit')?.value) || 5);
+          targetGroups = makeCandGroupsFromRestGroups(restGroups, cap);
+        }
+
+        // 実行
+        const hList = await solveMeasureH(start, goal, targetGroups, profile);
+        
+        const t1 = performance.now();
+        const ms = t1 - t0;
+        const ors = API_USED.orsTotal - orsBefore;
+        const ov  = API_USED.overpassTotal - ovpBefore;
+
+        if (!hList || !hList.length) {
+          panel.textContent += '(候補なし)\n';
+        } else {
+          attachBfRank(hList, bfRankMap);
+
+          panel.textContent += `処理時間: ${ms.toFixed(1)} ms\n`;
+          panel.textContent += `ORS呼び出し: ${ors} 回\n`;
+          panel.textContent += `Overpass呼び出し: ${ov} 回\n\n`;
+
+          showAlgoListInPanel(panel, hList.slice(0, 3), 'measure_H');
+          pushAlgoResultsForCsv('H', 'SG排除+Viterbi(DP)', hList, ms, ors, ov);
+        }
+
+      } catch (e) {
+        console.error('Algo H fail:', e);
+        panel.textContent += '\n[対策H エラー] ' + (e.message || e) + '\n';
+      }
+      
+      // API休憩
+      if(typeof waitApi === 'function') await waitApi(5000); 
+    }
+
     // ----------------------------------------------------------
     // 全体時間
     // ----------------------------------------------------------
@@ -5160,6 +5211,128 @@ async function solveMeasureG(start, goal, groups, profile) {
   return finalResults;
 }
 
+/* ==========================================================
+   【対策H】SG排除 Viterbi (DP) + 一括リランク
+   ・Start/Goal区間を無視するのはGと同じ
+   ・ただし、中間は「各POIへの最良パスを1つ残す(Viterbi)」方式
+   ========================================================== */
+async function solveMeasureH(start, goal, groups, profile) {
+  const T = Array.isArray(groups) ? groups.length : 0;
+  if (!T) return [];
+
+  // ★変更1: 距離の理想値を取得
+  const ideals = getIdealPerLegs();
+  const idealDistPerLeg = ideals.idealDistPerLeg; 
+
+  const apiFunc = calcLegCostWithApi; 
+
+  // --- Step 0: Start -> Group 0 (Layer 0) ---
+  // Start区間はコスト無視(=0)で初期化
+  // currentPaths[i] には「groups[0][i] に至るまでのパス情報」が入る
+  let currentPaths = groups[0].map(poi => ({
+    picks: [poi],
+    currentCost: 0,
+    lastNode: poi,
+    valid: true // 生存フラグ
+  }));
+
+  // --- Step 1..T-1: 中間区間 (Layer t) ---
+  for (let t = 1; t < T; t++) {
+    const nextGroup = groups[t];
+    
+    // 次の層の各POIについて「ベストな親」を探す
+    // nextPaths[j] = groups[t][j] に至る最良パス
+    const nextPaths = new Array(nextGroup.length).fill(null);
+
+    // 次の層の各ノード(j)に対してループ
+    for (let j = 0; j < nextGroup.length; j++) {
+      const nextPoi = nextGroup[j];
+      let bestCost = Infinity;
+      let bestPathObj = null;
+
+      // 前の層の全ノード(i)から、jへの遷移を試す
+      for (let i = 0; i < currentPaths.length; i++) {
+        const parent = currentPaths[i];
+        if (!parent || !parent.valid) continue;
+
+        try {
+          // API負荷軽減（ループ内待機）
+          await new Promise(r => setTimeout(r, 1000)); 
+
+          const leg = await apiFunc(parent.lastNode, nextPoi, profile);
+          
+          // 距離MSEペナルティ
+          const diff = leg.distKm - idealDistPerLeg;
+          const penalty = diff * diff;
+          const newCost = parent.currentCost + penalty;
+
+          // Viterbi: 最小コストなら更新
+          if (newCost < bestCost) {
+            bestCost = newCost;
+            bestPathObj = {
+              picks: [...parent.picks, nextPoi],
+              currentCost: newCost,
+              lastNode: nextPoi,
+              valid: true
+            };
+          }
+        } catch (e) {
+          console.warn(`Algo H: edge calc failed at layer ${t}, node ${j}`, e);
+        }
+      }
+      
+      // j に至るベストパスを保存
+      nextPaths[j] = bestPathObj;
+    }
+
+    // 生存しているパスだけで更新（nullは除外しないとインデックスがズレるので、validフラグ等で管理するか、nullのままにして次で弾く）
+    // ここでは単純に次のループで !parent チェックしているので nextPaths をそのまま渡す
+    currentPaths = nextPaths;
+  }
+
+  // --- Last Step: 候補の確定 ---
+  // currentPaths には「最後の休憩地点の各POI」に至るベストパスが入っている
+  const candidates = currentPaths.filter(p => p && p.valid);
+
+  console.log(`Algo H: 予選通過 ${candidates.length} 件 (各POIのベスト)。決勝(リランク)開始...`);
+
+  // --- Final Step: 一括APIでリランク (決勝戦) ---
+  const finalResults = [];
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const waypoints = [start, ...candidate.picks, goal];
+
+    try {
+      await new Promise(r => setTimeout(r, 2000));
+
+      const out = await routeLegStatsForWaypoints(waypoints, profile);
+      const distScore = routeDistMseFromStats(out.stats, idealDistPerLeg);
+
+      finalResults.push({
+        rank: 0,
+        score: distScore,
+        rawScore: distScore,
+        poi_names: candidate.picks.map(p => p.name).join(' -> '),
+        poi_latlngs: candidate.picks.map(p => `${p.lat},${p.lon}`).join(' | '),
+        sigmaEnergy: stdDev(out.stats.energy),
+        dist: out.stats.dist,
+        time: out.stats.time,
+        picks: candidate.picks,
+        stats: out.stats
+      });
+      
+    } catch (e) {
+      console.warn(`Algo H: リランク失敗 (Candidate ${i})`, e);
+    }
+  }
+
+  finalResults.sort((a, b) => a.score - b.score);
+  finalResults.forEach((r, idx) => r.rank = idx + 1);
+
+  return finalResults;
+}
+  
 function formatNum(x, digits=3){
   const n = Number(x);
   if (!Number.isFinite(n)) return '';
@@ -5756,6 +5929,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
