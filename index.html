@@ -3845,6 +3845,11 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
   });
 }
   
+/* ==========================================================
+   【修正版】結果表示関数
+   ・勝手な再ソート(sortResultsByUnifiedScore)を廃止
+   ・アルゴリズムが決めた順序(list)をそのまま尊重して表示する
+   ========================================================== */
 function showAlgoListInPanel(panel, list, algoCode){
   if (!panel) return;
   if (!Array.isArray(list) || !list.length){
@@ -3853,17 +3858,22 @@ function showAlgoListInPanel(panel, list, algoCode){
   }
   
   const MAX_SHOW = 3;
-  const ideals = getIdealPerLegs();
-  const sorted = sortResultsByUnifiedScore(list, ideals.idealEnergyPerLeg);
-  const top = sorted.slice(0, MAX_SHOW);
+  
+  // ★修正：ここで勝手に再ソートしていた行を削除しました
+  // const sorted = sortResultsByUnifiedScore(list, ideals.idealEnergyPerLeg); 
+  
+  // 渡されたリストの先頭3つをそのまま表示する
+  const top = list.slice(0, MAX_SHOW);
 
   top.forEach((r, idx)=>{
+    // ここでの rank は「そのアルゴリズム内での順位」
     const rank = idx + 1;
 
     const score    = r.score    ?? null;
     const rawScore = r.rawScore ?? null;
 
     const stats   = r.stats || {};
+    // ※statsの中身がない場合のエラー防止
     const distArr = Array.isArray(stats.dist)   ? stats.dist   : [];
     const timeArr = Array.isArray(stats.time)   ? stats.time   : [];
     const eneArr  = Array.isArray(stats.energy) ? stats.energy : [];
@@ -3881,8 +3891,9 @@ function showAlgoListInPanel(panel, list, algoCode){
     panel.textContent += `#${rank}  score=${score}\n`;
     if (rawScore != null) panel.textContent += `  rawScore=${rawScore}\n`;
 
-    // ★追加：総当たり順位
+    // 総当たり順位の表示
     if (r.bfRank != null) {
+      // bfRankが数万件中1位なら、ここも「1」と表示されるはず
       panel.textContent += `  bf_rank=${r.bfRank}\n`;
     } else {
       panel.textContent += `  bf_rank=(圏外/不一致)\n`;
@@ -3895,7 +3906,7 @@ function showAlgoListInPanel(panel, list, algoCode){
     panel.textContent += `  POI: ${poiNames}\n\n`;
   });
 }
-
+  
 function downloadAlgoCompareCsv(){
   const rows = window.__algoCompareRows || [];
   if (!rows.length){
@@ -6067,6 +6078,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
