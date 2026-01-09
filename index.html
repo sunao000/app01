@@ -3565,7 +3565,7 @@ async function runAlgoCompareDebug(){
     }
 
 /* ---------- 【修正版】対策G: SG排除 + Viterbi (UI表示・順位対応) ---------- */
-    if (isAlgoEnabled('dbg_G') || true) { 
+    if (isAlgoEnabled('dbg_G')) { 
       // 見出しを表示
       panel.textContent += '\n--- 対策G：SG排除 + Viterbi (距離MSE) ---\n';
 
@@ -6067,6 +6067,7 @@ window.drawManualComparison = async function() {
 </script>
 </body>
 </html>
+
 
 
 
