@@ -3151,26 +3151,36 @@ async function showLinearComboRoute(row){
 }
 
 /* ==========================================================
-   【修正版】アルゴリズム比較用：データ蓄積
-   ※総当たり(dbg_bf)の場合は「全件」出力するように修正
+   【完全修正版】CSVデータ蓄積関数
+   ・総当たり(dbg_bf)は全件出力 (3件で切らない)
+   ・理想距離 (ideal_dist_km) を出力
    ========================================================== */
 function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls, overpassCalls){
   if (!Array.isArray(resultList) || !resultList.length) return;
   if (!Array.isArray(window.__algoCompareRows)) window.__algoCompareRows = [];
 
+  // 1. スコア順にソート
   const sorted = resultList.slice().sort((a, b) => {
     return (a.score ?? 999999) - (b.score ?? 999999);
   });
 
+  // 2. 出力件数の決定
   let outputList = sorted;
 
-  // ★修正箇所: 新しいID 'dbg_bf' も除外リストに追加
-  // これで dbg_bf (総当たり) は slice(0,3) されずに全件出力されます
-  if (algoCode !== 'bruteforce' && algoCode !== 'dbg_bf' && algoCode !== 'linear' && algoCode !== 'dbg_linear') {
+  // ★ここがポイント: 'dbg_bf' (総当たり) なら slice しない！
+  const isFullOutput = (
+    algoCode === 'dbg_bf' || 
+    algoCode === 'bruteforce' || 
+    algoCode === 'dbg_linear' || 
+    algoCode === 'linear'
+  );
+
+  if (!isFullOutput) {
+    // それ以外（Viterbiなど）は上位3件に絞る
     outputList = sorted.slice(0, 3);
   }
 
-  // ★理想値を取得
+  // 理想値取得
   const ideals = (typeof getIdealPerLegs === 'function') ? getIdealPerLegs() : { idealDistPerLeg: 0 };
 
   outputList.forEach((r, idx)=>{
@@ -3205,6 +3215,7 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
       orsCalls: orsCalls ?? 0,
       overpassCalls: overpassCalls ?? 0,
       
+      // ★理想距離を確実に保存
       idealDistKm: ideals.idealDistPerLeg,
 
       poiNames,
@@ -3212,6 +3223,8 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
       poiLatLngs
     });
   });
+  
+  console.log(`[CSV] Added ${outputList.length} rows for ${algoCode}`);
 }
   
 /* ==========================================================
@@ -5223,6 +5236,7 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
+
 
 
 
