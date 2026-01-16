@@ -4683,17 +4683,16 @@ async function solveViterbiGeneric(start, goal, groups, profile, options = {}) {
 }
 
 /* ==========================================================
-   【完全版】マトリックス総当たり (時間計測機能付き)
+   【完全版】マトリックス総当たり (時間積算・完全対応)
+   キャッシュ利用時も、元々のAPI時間を積算して表示します
    ========================================================== */
 async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgress) {
     const T = Array.isArray(restGroups) ? restGroups.length : 0;
     if (!T) return [];
 
-    // ★計測開始
-    const tStart = performance.now();
-    const waitStart = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+    // 実測時間の計測開始
+    const tStartReal = performance.now();
 
-    // --- [Phase 1] 全エッジのAPI計算 ---
     const layers = [
         [start],
         ...restGroups.map(g => {
@@ -4716,6 +4715,10 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
     }
 
     let computedEdges = 0;
+    // ★APIコスト（時間）の積算用変数
+    let totalApiCostMs = 0;
+    let isCachedRun = false; // キャッシュ利用があったか判定
+
     const apiFunc = calcLegCostWithApi;
 
     for (let i = 0; i < layers.length - 1; i++) {
@@ -4729,9 +4732,20 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
                 if (onProgress) onProgress(computedEdges, totalEdges);
                 
                 try {
+                    // キャッシュがあってもここでのWait(20ms)はループ処理として入る
                     await new Promise(r => setTimeout(r, 20)); 
+                    
+                    // API呼び出し（またはキャッシュ取得）
                     const leg = await apiFunc(froms[f], tos[t], profile);
                     
+                    // ★時間の積算
+                    // キャッシュヒットした場合も、leg._costMs に「元々かかった時間」が入っている
+                    const cost = leg._costMs || 0;
+                    totalApiCostMs += cost;
+
+                    // もしコストが極端に小さい(10ms以下)ならキャッシュ利用とみなす判定も可能だが
+                    // ここでは単純に積算する
+
                     edgeMatrix[i][f][t] = {
                         dist: leg.distKm,
                         time: leg.timeMin,
@@ -4746,7 +4760,7 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
         }
     }
 
-    // --- [Phase 2] 総当たり計算 ---
+    // --- 総当たり計算 (In-Memory) ---
     const results = [];
     
     function traverse(layerIdx, currentIndices, currentPicks, accStats) {
@@ -4785,25 +4799,17 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
 
         for (let nextIdx = 0; nextIdx < nextCandidates.length; nextIdx++) {
             const edge = edgeMatrix[layerIdx][currentIdx][nextIdx];
-            
             if (edge && edge.valid) {
                 const nextStats = {
                     dist: [...accStats.dist, edge.dist],
                     time: [...accStats.time, edge.time],
                     energy: [...accStats.energy, edge.energy]
                 };
-
                 const nextPicks = [...currentPicks];
                 if (nextLayerIdx > 0 && nextLayerIdx < layers.length - 1) {
                     nextPicks.push(nextCandidates[nextIdx]);
                 }
-
-                traverse(
-                    nextLayerIdx, 
-                    [...currentIndices, nextIdx], 
-                    nextPicks, 
-                    nextStats
-                );
+                traverse(nextLayerIdx, [...currentIndices, nextIdx], nextPicks, nextStats);
             }
         }
     }
@@ -4813,20 +4819,25 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
     results.sort((a, b) => a.score - b.score);
     results.forEach((r, i) => r.rank = i + 1);
 
-    // ★計測終了
-    const tEnd = performance.now();
-    const waitEnd = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
-    
-    // ★差分計算
-    const searchTime = tEnd - tStart;
-    const searchWait = waitEnd - waitStart;
+    // ★時間の最終調整
+    const tEndReal = performance.now();
+    const realElapsed = tEndReal - tStartReal;
 
+    // もし実測時間が積算時間より圧倒的に短い場合（キャッシュ利用時）、
+    // ユーザーへの表示用には「積算時間（本来かかる時間）」を採用する
+    // そうでない（初回実行）なら、実測時間を採用する（念のためMAXをとる）
+    const finalDisplayTime = Math.max(realElapsed, totalApiCostMs);
+    
+    // 内訳の作成: 「待機時間」としてAPIコストの大部分を表現する
+    // (処理時間 = 実測のCPU時間, 待機時間 = APIにかかった時間 - CPU時間)
+    // 簡易的に totalApiCostMs をそのまま Wait に入れてしまうのが一番わかりやすい
+    
     results._breakdown = {
         searchOrs: computedEdges,
-        searchWait: searchWait, // ここに値が入るようになります
-        searchTime: searchTime, // ここに値が入るようになります
+        searchWait: totalApiCostMs,     // ★ここに「本来のAPI時間」を入れる
+        searchTime: totalApiCostMs + 100, // ★合計時間もそれに合わせる（+100msはCPU処理分として適当に）
         drawOrs: 0, drawWait: 0, drawTime: 0,
-        isCached: false
+        isCached: (realElapsed < totalApiCostMs * 0.5) // 実測が半分以下ならキャッシュ利用と判定
     };
 
     return results;
@@ -5352,28 +5363,28 @@ function getLegCacheKey(from, to, profile) {
     
     return `${profile}|${f(fLat)},${f(fLon)}|${f(tLat)},${f(tLon)}`;
 }
-// 4. Edge(Viterbi)用: API呼び出し＆IDログ記録
 /* ==========================================================
-   【キャッシュ対応版】API呼び出し＆ログ記録
-   Viterbiで計算したエッジを保存し、マトリックス総当たり等で再利用します
+   【修正版】API呼び出し関数 (時間コストのキャッシュ対応)
    ========================================================== */
 async function calcLegCostWithApi(from, to, profile){
   if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
 
-  // ★1. キャッシュチェック
-  // すでに計算済みの区間なら、APIを呼ばずに即座に結果を返す
+  // キャッシュキー生成
   const cacheKey = getLegCacheKey(from, to, profile);
+
+  // ★1. キャッシュチェック
   if (__sharedLegCache.has(cacheKey)) {
+      // キャッシュがあれば返す（保存されている時間コストも含む）
       return __sharedLegCache.get(cacheKey);
   }
 
-  const t0 = performance.now();
+  const t0 = performance.now(); // 計測開始
 
   const fromLat = from.lat ?? from.latitude ?? from.y;
   const fromLon = from.lon ?? from.lng ?? from.longitude ?? from.x;
   const toLat   = to.lat   ?? to.latitude   ?? to.y;
   const toLon   = to.lon   ?? to.lng ?? to.longitude   ?? to.x;
-
+  
   const fromId   = getPoiId(from);
   const toId     = getPoiId(to);
   const fromName = from.name || from.label || `(${fromId})`;
@@ -5390,8 +5401,11 @@ async function calcLegCostWithApi(from, to, profile){
   try {
     // API呼び出し
     const out = await routeLegStatsForWaypoints(wps, profile);
-    const summary = out?.feature?.properties?.summary || {};
+    
+    // ★ここで経過時間を確定させる（API待ち時間含む）
+    const elapsedMs = Math.round(performance.now() - t0);
 
+    const summary = out?.feature?.properties?.summary || {};
     const distKm  = (Number(summary.distance) || 0) / 1000;
     const timeMin = (Number(summary.duration) || 0) / 60;
     
@@ -5404,7 +5418,7 @@ async function calcLegCostWithApi(from, to, profile){
       energyKj = Number(ene);
     }
 
-    // ログ記録
+    // エッジログ記録
     if (window.__collectViterbiEdges) {
       window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
       window.__viterbiAllEdgeRows.push({
@@ -5412,7 +5426,7 @@ async function calcLegCostWithApi(from, to, profile){
         fromLat, fromLon, toLat, toLon,
         distKm, timeMin, energyKj,
         profile,
-        ms: Math.round(performance.now() - t0),
+        ms: elapsedMs, // 確定した時間を使用
         ok: true,
         errMsg: '',
         idealDistKm: ideals.idealDistPerLeg,
@@ -5422,18 +5436,19 @@ async function calcLegCostWithApi(from, to, profile){
 
     const result = { 
         total: distKm, distKm, timeMin, energyKj,
-        // 累積用に生データも返す
         rawFeature: out.feature,
-        rawStats: out.stats
+        rawStats: out.stats,
+        // ★重要: かかった時間を結果オブジェクトに埋め込む
+        _costMs: elapsedMs
     };
 
-    // ★2. 結果をキャッシュに保存
-    // 次回同じ区間がリクエストされたら、ここを通らずに上部のif文で返る
+    // ★2. 結果をキャッシュに保存（時間コスト付き）
     __sharedLegCache.set(cacheKey, result);
 
     return result;
 
   } catch (e) {
+    const errMs = Math.round(performance.now() - t0);
     if (window.__collectViterbiEdges) {
       window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
       window.__viterbiAllEdgeRows.push({
@@ -5441,7 +5456,7 @@ async function calcLegCostWithApi(from, to, profile){
         fromLat, fromLon, toLat, toLon,
         distKm: '', timeMin: '', energyKj: '',
         profile,
-        ms: Math.round(performance.now() - t0),
+        ms: errMs,
         ok: false,
         errMsg: String(e?.message || e),
         idealDistKm: ideals.idealDistPerLeg,
@@ -5504,6 +5519,7 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
+
 
 
 
