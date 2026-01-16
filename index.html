@@ -243,13 +243,15 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 
 <div style="display:flex; flex-direction:column; gap:4px; margin:8px 0; padding:8px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px;">
 <div style="display:flex; flex-direction:column; gap:4px; margin:8px 0; padding:8px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px;">
-  <div style="font-weight:bold; margin-bottom:4px; color:#555;">比較するアルゴリズム</div>
-  <label><input type="checkbox" id="dbg_bf" checked> 1. 総当たり (Ground Truth)</label>
-  <label><input type="checkbox" id="dbg_vit_pure" checked> 2. 純粋Viterbi (標準)</label>
-  <label><input type="checkbox" id="dbg_linear" checked> 3. 直線比較 (Zero API)</label>
-  <label><input type="checkbox" id="dbg_beam" checked> 4. 純粋ビームサーチ (Width=5)</label>
-  <label><input type="checkbox" id="dbg_vit_sg_excl" checked> 5. SG排除・純粋Viterbi</label>
-  <label><input type="checkbox" id="dbg_vit_sg_excl_rerank" checked> 6. SG排除・純粋Viterbi + 再ランク</label>
+ <div style="font-weight:bold; margin-bottom:4px; color:#555;">比較するアルゴリズム</div>
+<label><input type="checkbox" id="dbg_bf" checked> 1. 総当たり (Ground Truth)</label>
+<label><input type="checkbox" id="dbg_vit_pure" checked> 2. 純粋Viterbi (高速)</label>
+<label><input type="checkbox" id="dbg_vit_pure_rerank" checked> 3. 純粋Viterbi + 再ランク</label>
+<label><input type="checkbox" id="dbg_linear"> 4. 直線比較 (Zero API)</label>
+<label><input type="checkbox" id="dbg_beam"> 5. 純粋ビームサーチ (Width=5)</label>
+<label><input type="checkbox" id="dbg_vit_sg_excl"> 6. SG排除・純粋Viterbi</label>
+<label><input type="checkbox" id="dbg_vit_sg_excl_rerank"> 7. SG排除・純粋Viterbi + 再ランク</label>
+  <label><input type="checkbox" id="dbg_matrix_bf" checked> 8. マトリックス総当たり (推奨)</label>
 </div>
 
 <!-- サマリー -->
@@ -265,6 +267,8 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 // const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
 const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
 const ORS_ROOT = 'https://api.openrouteservice.org';
+
+const ORS_INTERVAL = 2500;
 
 /* ====== ヘルパ ====== */
 let map, pts=[], markerLayer, routeLayers={}, lastDirTs=0;
@@ -749,15 +753,17 @@ window.addEventListener('DOMContentLoaded', ()=>{
   renderPerf();
 });
 
-/* ===== API 利用カウンタ ===== */
+/* ===== API 利用＆待機時間カウンタ ===== */
 const API_USED = {
-  orsTotal: 0,             // ページ全体での ORS 呼び出し回数
+  orsTotal: 0,             // ORS 呼び出し回数
   orsAtSolveStart: 0,
-  lastSolveOrs: 0,         // 直近の「ルート探索」1回で使った ORS 回数
+  lastSolveOrs: 0,
 
-  overpassTotal: 0,        // ページ全体での Overpass 呼び出し回数
+  overpassTotal: 0,        // Overpass 呼び出し回数
   overpassAtSolveStart: 0,
-  lastSolveOverpass: 0     // 直近の「ルート探索」1回で使った Overpass 回数
+  lastSolveOverpass: 0,
+
+  waitTotal: 0             // ★追加: API制限による待機時間の累計 (ms)
 };
 
 // アルゴリズムコード → 表示用ラベル
@@ -1149,13 +1155,9 @@ async function nomSearch(q){
 }
 
 
-/* ====== ORS ====== */
-/* ====== ORS API 呼び出し（レート制限対策・エラー詳細化版） ====== */
-
-// ★変更点1: 待機時間を 1100ms -> 2500ms (2.5秒) に変更
-// 無料枠は「1分間に40回」なので、1回あたり最低1.5秒は必要。余裕を持って2.5秒にします。
-const ORS_INTERVAL = 2500; 
-
+/* ==========================================================
+   【修正版】ORS API 呼び出し (待機時間計測対応)
+   ========================================================== */
 async function dir(body, profile) {
   // 現在時刻と前回の差分を計算
   const now = Date.now();
@@ -1164,6 +1166,8 @@ async function dir(body, profile) {
 
   // まだ時間が経っていなければ待機
   if (wait > 0) {
+    // ★待機時間を記録
+    if (typeof API_USED !== 'undefined') API_USED.waitTotal += wait;
     await new Promise(r => setTimeout(r, wait));
   }
 
@@ -1178,18 +1182,18 @@ async function dir(body, profile) {
     lastDirTs = Date.now();
     return d;
   } catch (e) {
-    // エラーでも時刻更新（連続リトライによるパンクを防ぐため）
+    // エラーでも時刻更新
     lastDirTs = Date.now();
     throw e;
   }
 }
 
-/* ==============================================
-   【修正版】API呼び出し関数（重複エラー対策済み）
-   ============================================== */
+/* ==========================================================
+   【修正版】API呼び出し関数 (リトライ待機時間計測対応)
+   ========================================================== */
 async function post(url, body) {
-  const MAX_RETRIES = 5; // 最大5回まで再挑戦
-  let delay = 5000;      // 初回は5秒待つ
+  const MAX_RETRIES = 5; 
+  let delay = 5000;      
 
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
@@ -1202,24 +1206,21 @@ async function post(url, body) {
         body: JSON.stringify(body)
       });
 
-      // 成功 (200 OK) なら結果を返して終了
-      if (r.ok) {
-        return await r.json();
-      }
+      if (r.ok) return await r.json();
 
-      // 429 (Too Many Requests) の場合 -> 待機してリトライ
       if (r.status === 429) {
-        console.warn(`[API] 429 Rate Limit detected. Waiting ${delay/1000}s... (Retry ${i+1}/${MAX_RETRIES})`);
-        // 既存の sleep 関数を使います
+        console.warn(`[API] 429 Rate Limit. Waiting ${delay/1000}s...`);
+        // ★リトライ待機時間を記録
+        if (typeof API_USED !== 'undefined') API_USED.waitTotal += delay;
+        
         await sleep(delay);
-        delay *= 2; // 待機時間を倍に増やす (5s -> 10s -> 20s...)
-        continue;   // ループの先頭に戻ってやり直す
+        delay *= 2; 
+        continue;   
       }
 
-      // その他のエラー (403:1日の上限超過, 500:サーバーエラーなど) -> 即座にエラーにして止める
       let errorMsg = `Error ${r.status}`;
       if (r.status === 403) {
-        errorMsg += ': APIキーの無効化、または1日の利用上限(2000回)を超過しました。ダッシュボードを確認してください。';
+        errorMsg += ': APIキー無効または上限超過';
       } else {
         try {
           const txt = await r.text();
@@ -1229,22 +1230,19 @@ async function post(url, body) {
       throw new Error(errorMsg);
 
     } catch (e) {
-      // ネットワークエラー等でfetch自体が失敗した場合もリトライ対象にする
-      // ただし、明示的にthrowした403エラーなどは再送しない
-      if (e.message.includes('Error 403')) {
-        throw e;
-      }
+      if (e.message.includes('Error 403')) throw e;
       
-      console.warn(`[API] Network or Fetch error. Waiting ${delay/1000}s...`, e);
-      // 既存の sleep 関数を使います
+      console.warn(`[API] Network/Fetch error. Waiting ${delay/1000}s...`, e);
+      // ★エラーリトライ待機時間を記録
+      if (typeof API_USED !== 'undefined') API_USED.waitTotal += delay;
+
       await sleep(delay);
       delay *= 2;
     }
   }
-
   throw new Error(`API Retry limit exceeded after ${MAX_RETRIES} attempts.`);
 }
-
+  
 /* ====== ルート表示関連 ====== */
 function clearRouteLayers(){
   Object.values(routeLayers).forEach(l=>{ if(l) map.removeLayer(l); });
@@ -2373,95 +2371,6 @@ function buildLinearAlgoRows(start, goal, groups, hardCap = 200000) {
   return rows;
 }
 
-/* ==========================================================
-   【Edge専用修正版】Viterbiエッジ出力関数セット
-   ※Edgeログにのみ「理想距離 (ideal_dist_km)」を追加します
-   ========================================================== */
-
-// 1. API呼び出し＆ログ記録 (理想距離を保存)
-async function calcLegCostWithApi(from, to, profile){
-  if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
-
-  const t0 = performance.now();
-  // 座標取得
-  const fromLat = from.lat ?? from.latitude ?? from.y;
-  const fromLon = from.lon ?? from.lng ?? from.longitude ?? from.x;
-  const toLat   = to.lat   ?? to.latitude   ?? to.y;
-  const toLon   = to.lon   ?? to.lng ?? to.longitude   ?? to.x;
-
-  // ID取得
-  const fromId   = (typeof getPoiId === 'function') ? getPoiId(from) : 'unknown';
-  const toId     = (typeof getPoiId === 'function') ? getPoiId(to)   : 'unknown';
-  const fromName = from.name || from.label || `(${fromId})`;
-  const toName   = to.name   || to.label   || `(${toId})`;
-
-  if (!Number.isFinite(fromLat) || !Number.isFinite(fromLon) ||
-      !Number.isFinite(toLat)   || !Number.isFinite(toLon)) {
-    throw new Error(`Invalid LatLon: ${fromId} -> ${toId}`);
-  }
-
-  const wps = [ { lat: fromLat, lon: fromLon }, { lat: toLat, lon: toLon } ];
-  
-  // ★理想値取得
-  const ideals = (typeof getIdealPerLegs === 'function') ? getIdealPerLegs() : { idealDistPerLeg: 0, idealEnergyPerLeg: 0 };
-
-  try {
-    const out = await routeLegStatsForWaypoints(wps, profile);
-    const summary = out?.feature?.properties?.summary || {};
-
-    const distKm  = (Number(summary.distance) || 0) / 1000;
-    const timeMin = (Number(summary.duration) || 0) / 60;
-    
-    const ene = out?.stats?.energy ?? out?.stats?.E ?? null;
-    let energyKj = 0;
-    if (Array.isArray(ene) && ene.length) {
-      const last = Number(ene[ene.length - 1]);
-      energyKj = (Number.isFinite(last) && last > 0) ? last : sumNums(ene);
-    } else if (Number.isFinite(Number(ene))) {
-      energyKj = Number(ene);
-    }
-
-    // 生ログ保存
-    if (window.__collectViterbiEdges) {
-      window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
-      window.__viterbiAllEdgeRows.push({
-        fromId, toId,
-        fromName, toName,
-        fromLat, fromLon, toLat, toLon,
-        distKm, timeMin, energyKj,
-        profile,
-        ms: Math.round(performance.now() - t0),
-        ok: true,
-        errMsg: '',
-        // ★ここに理想距離を保存
-        idealDistKm: ideals.idealDistPerLeg,
-        idealEnergyKj: ideals.idealEnergyPerLeg
-      });
-    }
-
-    return { total: distKm, distKm, timeMin, energyKj };
-
-  } catch (e) {
-    if (window.__collectViterbiEdges) {
-      window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
-      window.__viterbiAllEdgeRows.push({
-        fromId, toId,
-        fromName, toName,
-        fromLat, fromLon, toLat, toLon,
-        distKm: '', timeMin: '', energyKj: '',
-        profile,
-        ms: Math.round(performance.now() - t0),
-        ok: false,
-        errMsg: String(e?.message || e),
-        // ★エラー時も保存
-        idealDistKm: ideals.idealDistPerLeg,
-        idealEnergyKj: ideals.idealEnergyPerLeg
-      });
-    }
-    throw e;
-  }
-}
-
 // Viterbi（API利用版）
 // start, goal: {lat, lon} 形式
 // restGroups: [ [POI, POI, ...], [POI, ...], ... ] 各トリガーごとの候補POI
@@ -2950,83 +2859,73 @@ async function viterbiRouteCost(p1, p2, profile){
   return { dist, time, energy };
 }
 
-/* ===== 【決定版】総当たり (データ構造自動判定・区間評価修正済み) ===== */
-/* ===== 【決定版】総当たり (データ構造自動判定・区間評価修正済み) ===== */
-async function runBruteforceOnce(start, goal, restGroups, profile){
-  // 1. データソースの確保
+/* ==========================================================
+   【修正版】総当たり (確認ダイアログ廃止・リミット緩和版)
+   ========================================================== */
+async function runBruteforceOnce(start, goal, restGroups, profile, onProgress){
   const sourceGroups = (restGroups && restGroups.length) ? restGroups : window.restGroups;
+  if (!sourceGroups || !sourceGroups.length) throw new Error('RestGroups not found');
+  const poiGroups = sourceGroups.map(g => Array.isArray(g.pois)?g.pois : (Array.isArray(g)?g:[]));
   
-  if (!sourceGroups || !sourceGroups.length) {
-    throw new Error('総当たりエラー: 休憩グループデータ(restGroups)が見つかりません。');
-  }
-
-  // 2. データ構造を柔軟に判定してPOIリストを取り出す
-  const poiGroups = sourceGroups.map((g, i) => {
-    if (g && Array.isArray(g.pois)) return g.pois;
-    if (Array.isArray(g)) return g;
-    console.warn(`[BF] Group ${i} has no POIs.`, g);
-    return [];
-  });
-
-  // 組み合わせ作成設定
+  // POI件数上限の設定値を取得
   const perGroupLimit = Math.max(1, Number($('poiLimit').value) || 5);
   const combos = enumerateCombinations(poiGroups, perGroupLimit);
   
-  if (!combos.length) throw new Error('組み合わせ候補が作れませんでした。POI不足の可能性があります。');
+  if (!combos.length) throw new Error('No combinations');
 
-  // 安全装置
-  const HARD_LIMIT = 200; 
+  // ★修正: リミットを200から大幅に増やし、confirm（確認画面）を削除
+  // 実験用なので、多少多くても止まらずに実行するようにします。
+  const HARD_LIMIT = 1000; 
   if (combos.length > HARD_LIMIT) {
-    const estTimeMinutes = Math.round(combos.length * 2.5 / 60);
-    const msg = `総当たりの組み合わせが ${combos.length} 件あります。\n完了まで約 ${estTimeMinutes} 分かかります。実行しますか？`;
-    if (!confirm(msg)) throw new Error('キャンセルされました');
+    // さすがに多すぎる場合のみエラーで止める（ブラウザクラッシュ防止）
+    throw new Error(`組み合わせが多すぎます (${combos.length}件)。POI件数上限を減らしてください。`);
+  } else if (combos.length > 1000) {
+    console.warn(`[総当たり] 組み合わせ数が ${combos.length} 件あります。時間がかかりますが実行します。`);
   }
 
-  // 理想距離計算
-  const ideals = getIdealPerLegs();
-  const idealDistPerLeg = ideals.idealDistPerLeg; 
+  // ※ここは参照されなくなるが、他の指標用に残しておく
+  const ideals = getIdealPerLegs(); 
 
   const results = [];
-  const panel = $('algoComparePanel');
+  const tStart = performance.now();
+  const orsStart = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitStart = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
 
   for (let i = 0; i < combos.length; i++){
+    if (onProgress) onProgress(i, combos.length);
     const cmb = combos[i];
     const picks = cmb.filter(Boolean);
-    const wps = [start, ...picks, goal].map(p => ({
-      lat: p.lat, lon: p.lon, name: p.name || 'POI'
-    }));
-
-    if (i % 5 === 0 && panel) panel.textContent += `..${i}/${combos.length}`;
-
+    const wps = [start, ...picks, goal].map(p => ({ lat: p.lat, lon: p.lon, name: p.name || 'POI' }));
     try {
-      await new Promise(r => setTimeout(r, 1500)); // API負荷調整
-
+      // API負荷軽減のためのウェイト（必要に応じて調整してください）
+      await new Promise(r => setTimeout(r, 200)); 
+      
       const {feature, stats} = await routeLegStatsForWaypoints(wps, profile);
       
-      // 正しいMSE計算（ヘルパー関数利用）
-      // ※関数がなければ0にする安全策付き
-      const distScore = (typeof calcDistMseFromFeature === 'function')
-        ? calcDistMseFromFeature(feature, idealDistPerLeg)
-        : 0;
-
-      results.push({
-        score: distScore,
-        rawScore: distScore,
-        feature,
-        picks,
-        picksByTrigger: cmb,
-        stats
-      });
+      // 動的理想距離でのMSE計算
+      const distScore = (typeof calcDistMseFromFeature === 'function') 
+        ? calcDistMseFromFeature(feature, null) : 0;
+        
+      results.push({ score: distScore, rawScore: distScore, feature, picks, picksByTrigger: cmb, stats });
     } catch (e){
-      console.warn('BF Route Error:', e);
+        // 個別のルート計算失敗は無視して次へ
     }
   }
 
-  // スコア順（昇順）ソート
   results.sort((a, b) => (a.score ?? 1e9) - (b.score ?? 1e9));
-  
-  // 順位（bfRank）を付与
   results.forEach((r, idx) => r.bfRank = idx + 1);
+
+  const tEnd = performance.now();
+  const orsEnd = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitEnd = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
+  results._breakdown = {
+      searchOrs:  orsEnd - orsStart,
+      searchWait: waitEnd - waitStart,
+      searchTime: tEnd - tStart,
+      drawOrs: 0, drawWait: 0, drawTime: 0,
+      isCached: false
+  };
 
   return results;
 }
@@ -3151,54 +3050,55 @@ async function showLinearComboRoute(row){
 }
 
 /* ==========================================================
-   【統合完全版】データ蓄積・CSV出力関数
-   ※以前の同名関数はすべて消して、これに置き換えてください
+   【修正版】データ蓄積・CSV出力関数 (実際に使った理想距離を出力)
    ========================================================== */
-
-// 1. アルゴリズム比較用: データ蓄積 (総当たり全件対応 & 理想距離対応)
 function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls, overpassCalls){
   if (!Array.isArray(resultList) || !resultList.length) return;
   if (!Array.isArray(window.__algoCompareRows)) window.__algoCompareRows = [];
 
-  // スコア順にソート
-  const sorted = resultList.slice().sort((a, b) => {
-    return (a.score ?? 999999) - (b.score ?? 999999);
-  });
+  const sorted = resultList.slice().sort((a, b) => (a.score ?? 9e9) - (b.score ?? 9e9));
+  
+  const isFullOutput = (algoCode === 'bruteforce' || algoCode === 'dbg_bf' || algoCode === 'linear' || algoCode === 'dbg_linear');
+  let outputList = isFullOutput ? sorted : sorted.slice(0, 3);
 
-  let outputList = sorted;
-
-  // ★修正ポイント1: 新しい総当たりID 'dbg_bf' を判定に追加
-  // これにより、総当たりの時は3件に絞らず全件出力されます
-  const isFullOutput = (
-    algoCode === 'bruteforce' || 
-    algoCode === 'dbg_bf' || 
-    algoCode === 'linear' || 
-    algoCode === 'dbg_linear'
-  );
-
-  if (!isFullOutput) {
-    outputList = sorted.slice(0, 3);
-  }
-
-  // ★修正ポイント2: 理想値を取得
-  const ideals = (typeof getIdealPerLegs === 'function') ? getIdealPerLegs() : { idealDistPerLeg: 0 };
+  // 初期固定値（Viterbi等の基準）
+  const fixedIdeals = (typeof getIdealPerLegs === 'function') ? getIdealPerLegs() : { idealDistPerLeg: 0 };
 
   outputList.forEach((r, idx)=>{
     const rank = idx + 1;
-    const sigmaDist   = stdDev(r.stats?.dist || []);
-    const sigmaTime   = stdDev(r.stats?.time || []);
-    const sigmaEnergy = stdDev(r.stats?.energy || []);
+    const stats = r.stats || { dist:[] };
+    
+    // ★修正: アルゴリズムや計算実態に合わせて「実際に使った平均距離」を算出する
+    let usedIdealDist = fixedIdeals.idealDistPerLeg;
+
+    if (algoCode === 'dbg_bf' || algoCode === 'bruteforce' || algoCode === 'dbg_linear') {
+        // 総当たり系は「自分自身の平均」を使っているはず
+        if (stats.dist && stats.dist.length > 0) {
+            const sum = stats.dist.reduce((a,b)=>a+(Number(b)||0), 0);
+            usedIdealDist = sum / stats.dist.length;
+        }
+    } else if (r.score === r.displayScore && stats.dist && stats.dist.length) {
+        // 再ランク系などで、スコアがMSE計算と一致する場合、念のため実測平均を確認
+        // (Viterbi探索中は固定値だが、最終結果リストに入っているスコアが「再ランク後」なら実測平均になっている可能性があるため)
+        // ここでは「固定値」と「実測平均」のどちらがスコアに近いかで判定するロジックも組めるが、
+        // シンプルに「Viterbi探索結果」としては固定値を表示し、
+        // 再ランク(rerank)済みなら実測平均を表示するのが親切。
+        
+        if (algoCode.includes('rerank')) {
+             const sum = stats.dist.reduce((a,b)=>a+(Number(b)||0), 0);
+             usedIdealDist = sum / stats.dist.length;
+        }
+    }
+
+    const sigmaDist   = stdDev(stats.dist || []);
+    const sigmaTime   = stdDev(stats.time || []);
+    const sigmaEnergy = stdDev(stats.energy || []);
 
     let poiList = (r.picks || r.picksByTrigger || []).filter(Boolean);
     if (Array.isArray(poiList[0])) poiList = poiList.flat().filter(Boolean);
-
     const poiNames = poiList.map(p => p.name || 'POI').join(' -> ');
-    // ID取得 (関数がある場合のみ)
     const poiIds   = (typeof getPoiId === 'function') ? poiList.map(p => getPoiId(p)).join(' -> ') : '';
-    
-    const poiLatLngs = poiList
-      .map(p => `${(p.lat ?? p.latitude)?.toFixed(6)},${(p.lon ?? p.lng ?? p.longitude)?.toFixed(6)}`)
-      .join(' | ');
+    const poiLatLngs = poiList.map(p => `${(p.lat??0).toFixed(6)},${(p.lon??0).toFixed(6)}`).join(' | ');
 
     window.__algoCompareRows.push({
       algo: algoCode,
@@ -3216,80 +3116,54 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
       orsCalls: orsCalls ?? 0,
       overpassCalls: overpassCalls ?? 0,
       
-      // ★修正ポイント3: 理想距離を保存
-      idealDistKm: ideals.idealDistPerLeg,
+      idealDistKm: usedIdealDist, // ★修正した値を出力
 
-      poiNames,
-      poiIds,
-      poiLatLngs
+      poiNames, poiIds, poiLatLngs
     });
   });
-  
   console.log(`[pushAlgoResults] ${algoCode}: ${outputList.length} rows added.`);
 }
   
 /* ==========================================================
-   【修正版】結果表示関数 (改行・整形対応)
+   【修正版】結果リスト表示 (改行・整形対応)
    ========================================================== */
 function showAlgoListInPanel(panel, list, algoCode){
   if (!panel) return;
-
-  // ★修正1: 進捗ログの直後にくっつかないよう、最初に必ず改行を入れる
-  panel.textContent += '\n';
+  // 進捗バー等の直後に改行を入れる
+  // panel.textContent += '\n'; 
 
   if (!Array.isArray(list) || !list.length){
     panel.textContent += '(候補なし)\n';
     return;
   }
   
-  // スコア(距離MSE)が小さい順に並べ替える
   const sorted = list.slice().sort((a, b) => {
     const sA = (typeof a.score === 'number') ? a.score : 999999;
     const sB = (typeof b.score === 'number') ? b.score : 999999;
     return sA - sB;
   });
 
-  // 上位3件を表示
   const top = sorted.slice(0, 3);
 
   top.forEach((r, idx)=>{
     const rank = idx + 1;
-
     const score    = r.score    ?? null;
-    const rawScore = r.rawScore ?? null;
+    const stats    = r.stats || {};
+    const sigDist = (stats.dist && stats.dist.length) ? stdDev(stats.dist) : null;
+    const sigTime = (stats.time && stats.time.length) ? stdDev(stats.time) : null;
+    const sigEn   = (stats.energy && stats.energy.length) ? stdDev(stats.energy) : null;
 
-    // 統計情報
-    const stats   = r.stats || {};
-    const distArr = Array.isArray(stats.dist)   ? stats.dist   : [];
-    const timeArr = Array.isArray(stats.time)   ? stats.time   : [];
-    const eneArr  = Array.isArray(stats.energy) ? stats.energy : [];
-
-    const sigDist = distArr.length ? stdDev(distArr) : null;
-    const sigTime = timeArr.length ? stdDev(timeArr) : null;
-    const sigEn   = eneArr.length  ? stdDev(eneArr)  : null;
-
-    // POI名
     const picksArr = (r.picks || r.picksByTrigger || []);
-    const poiNames = picksArr
-      .filter(Boolean)
-      .map(p => p.name || 'POI')
-      .join(' -> ');
+    const poiNames = picksArr.filter(Boolean).map(p => p.name || 'POI').join(' -> ');
 
-    // ★修正2: ランクを見出しとして独立させ、改行して見やすくする
     panel.textContent += `[#${rank}]\n`;
-    
-    if (score != null)    panel.textContent += `  score=${score}\n`;
-    if (rawScore != null) panel.textContent += `  rawScore=${rawScore}\n`;
-
-    // 総当たり順位 (あれば)
+    if (score != null)    panel.textContent += `  score=${score.toFixed(4)}\n`;
     if (r.bfRank != null && r.bfRank !== '-') {
       panel.textContent += `  bf_rank=${r.bfRank}\n`;
     }
-
     if (sigDist != null) panel.textContent += `  σ距離=${sigDist.toFixed(3)}\n`;
     if (sigTime != null) panel.textContent += `  σ時間=${sigTime.toFixed(3)}\n`;
     if (sigEn   != null) panel.textContent += `  σエネルギー=${sigEn.toFixed(3)}\n`;
-
     panel.textContent += `  POI: ${poiNames}\n\n`;
   });
 }
@@ -3629,16 +3503,28 @@ function legDistMseCost(distKm, idealDistPerLeg){
   return diff * diff;
 }
 
-// 【新規追加】ルート全体の距離MSEを計算
-function routeDistMseFromStats(stats, idealDistPerLeg){
+/* ==========================================================
+   【変更版】Stats用コスト計算 (そのルートの実測総距離を基準にする)
+   ========================================================== */
+function routeDistMseFromStats(stats, _unusedFixedIdeal) {
   const dArr = stats && Array.isArray(stats.dist) ? stats.dist : [];
   const n = dArr.length;
   if (!n) return NaN;
 
+  // 1. このルート自体の総距離を計算
+  let totalKm = 0;
+  for (let i = 0; i < n; i++) {
+    totalKm += (Number(dArr[i]) || 0); // dist配列は既にkm単位
+  }
+
+  // 2. 動的理想距離
+  const dynamicIdealDist = totalKm / n;
+
+  // 3. MSE計算
   let sum = 0;
-  for (let i = 0; i < n; i++){
-    const val = Number(dArr[i]);
-    const diff = (Number.isFinite(val) ? val : 0) - idealDistPerLeg;
+  for (let i = 0; i < n; i++) {
+    const val = Number(dArr[i]) || 0;
+    const diff = val - dynamicIdealDist;
     sum += diff * diff;
   }
   return sum / n;
@@ -3888,39 +3774,6 @@ function legKey(from, to, profile, decimals=6){
   const bLat = to?.lat   ?? to?.latitude   ?? to?.y;
   const bLon = to?.lon   ?? to?.lng ?? to?.longitude ?? to?.x;
   return `${profile}::${f(aLat)},${f(aLon)}=>${f(bLat)},${f(bLon)}`;
-}
-
-async function calcLegCostWithApiCached(from, to, profile){
-  const key = legKey(from, to, profile);
-  if (__legCache.has(key)) return __legCache.get(key);
-
-  const leg = await calcLegCostWithApi(from, to, profile);
-  __legCache.set(key, leg);
-  return leg;
-}
-
-function isAlgoEnabled(id){
-  const el = document.getElementById(id);
-  return !!(el && el.checked);
-}
-
-function applyAutoNamesToAllPois(){
-  if (!Array.isArray(restGroups)) return;
-
-  for (let ti = 0; ti < restGroups.length; ti++){
-    const arr = restGroups[ti]?.pois || [];
-    for (let pi = 0; pi < arr.length; pi++){
-      const p = arr[pi];
-      if (!p) continue;
-
-      // 安定ID（任意：おすすめ）
-      p._triggerId = ti;
-      p._poiIdInTrigger = pi;
-
-      // 名前が無ければ POI{ti}_{pi}
-      ensurePoiName(p, ti, pi);
-    }
-  }
 }
   
 function formatNum(x, digits=3){
@@ -4564,128 +4417,506 @@ window.drawManualComparison = async function() {
  * @param options.ignoreGoalInRank trueならGoal区間を順位決定に含めない(再評価時)
  */
 /* ==========================================================
-   【修正版】汎用Viterbiソルバー (ID記録対応)
+   【完全修正版】汎用Viterbiソルバー (コスト配分ロジック実装済み)
    ========================================================== */
 async function solveViterbiGeneric(start, goal, groups, profile, options = {}) {
   const T = Array.isArray(groups) ? groups.length : 0;
   if (!T) return [];
 
   const ignoreStart = options.ignoreStart === true;
+  // ignoreGoalInRank: trueなら「順位は確定済み(描画のみ)」、falseなら「これから順位決定(再ランク)」
   const ignoreGoalInRank = options.ignoreGoalInRank === true;
+  const ignoreGoalEdge = options.ignoreGoalEdge === true;
+  const usePathAccumulation = (options.usePathAccumulation === true) && !ignoreStart;
+  
+  const saveToCache = options.saveToCache === true;
+  const tryUseCache = options.tryUseCache === true;
+
   const apiFunc = calcLegCostWithApi; 
   const ideals = getIdealPerLegs();
   const idealDistPerLeg = ideals.idealDistPerLeg; 
+  const currentCacheType = ignoreStart ? 'sg_excluded' : 'standard';
 
-  // --- Step 0 ---
-  let currentPaths = new Array(groups[0].length).fill(null);
-  for (let i = 0; i < groups[0].length; i++) {
-    const firstPoi = groups[0][i];
-    let initialCost = 0;
-    if (!ignoreStart) {
-      try {
-        const leg = await apiFunc(start, firstPoi, profile);
-        const diff = leg.distKm - idealDistPerLeg;
-        initialCost = diff * diff; 
-        
-        // ★Edge記録 (ID付き)
-        recordViterbiEdge({
-          t: 0,
-          fromId: getPoiId(start), toId: getPoiId(firstPoi), // ID
-          fromName: start.name,    toName: firstPoi.name,
-          distKm: leg.distKm, timeMin: leg.timeMin, energyKj: leg.energyKj,
-          cost: initialCost,
-          idealEnergyKj: ideals.idealEnergyPerLeg
-        });
+  // --- [Phase 1] 候補探索 (Candidates) ---
+  const tStart = performance.now();
+  const orsStart = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitStart = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
 
-      } catch(e) {}
-    }
-    currentPaths[i] = {
-      picks: [firstPoi],
-      currentCost: initialCost,
-      lastNode: firstPoi,
-      valid: true
-    };
-  }
+  let candidates = null;
+  let cachedBreakdown = null;
 
-  // --- Step 1..T-1 ---
-  for (let t = 1; t < T; t++) {
-    if (options.onProgress) options.onProgress(t, T);
-
-    const nextGroup = groups[t];
-    const nextPaths = new Array(nextGroup.length).fill(null);
-
-    for (let j = 0; j < nextGroup.length; j++) {
-      const nextPoi = nextGroup[j];
-      let bestCost = Infinity;
-      let bestPath = null;
-
-      for (let i = 0; i < currentPaths.length; i++) {
-        const parent = currentPaths[i];
-        if (!parent || !parent.valid) continue;
-
-        try {
-          await new Promise(r => setTimeout(r, 20)); 
-          const leg = await apiFunc(parent.lastNode, nextPoi, profile);
-          const diff = leg.distKm - idealDistPerLeg;
-          const newCost = parent.currentCost + (diff * diff);
-
-          // ★Edge記録 (ID付き)
-          recordViterbiEdge({
-            t: t,
-            fromId: getPoiId(parent.lastNode), toId: getPoiId(nextPoi), // ID
-            fromName: parent.lastNode.name,    toName: nextPoi.name,
-            distKm: leg.distKm, timeMin: leg.timeMin, energyKj: leg.energyKj,
-            cost: (diff * diff),
-            idealEnergyKj: ideals.idealEnergyPerLeg
-          });
-
-          if (newCost < bestCost) {
-            bestCost = newCost;
-            bestPath = {
-              picks: [...parent.picks, nextPoi],
-              currentCost: newCost,
-              lastNode: nextPoi,
-              valid: true
-            };
-          }
-        } catch (e) {}
+  // 1. キャッシュ利用チェック
+  if (tryUseCache && window.__viterbiIntermediateCache) {
+      const c = window.__viterbiIntermediateCache;
+      if (c.type === currentCacheType) {
+          console.log(`[Viterbi] Using cached candidates (${c.type}).`);
+          candidates = c.candidates;
+          cachedBreakdown = c.breakdown; 
       }
-      nextPaths[j] = bestPath;
-    }
-    currentPaths = nextPaths;
   }
 
-  // Finalize (Goal Edge)
-  const candidates = currentPaths.filter(p => p && p.valid);
-  if (candidates.length > 0) {
+  // 2. キャッシュがない場合: 探索ループ実行
+  if (!candidates) {
+      const mergeStats = (s1, s2) => ({
+          dist:   [...(s1?.dist||[]),   ...(s2?.dist||[])],
+          time:   [...(s1?.time||[]),   ...(s2?.time||[])],
+          energy: [...(s1?.energy||[]), ...(s2?.energy||[])]
+      });
+      const mergeCoords = (c1, c2) => {
+          if (!c1 || !c1.length) return c2 || [];
+          if (!c2 || !c2.length) return c1;
+          return c1.concat(c2.slice(1));
+      };
+      const mergeSegments = (seg1, seg2) => [...(seg1||[]), ...(seg2||[])];
+
+      // Step 0
+      let currentPaths = new Array(groups[0].length).fill(null);
+      for (let i = 0; i < groups[0].length; i++) {
+        const firstPoi = groups[0][i];
+        let initialCost = 0;
+        let accStats={dist:[],time:[],energy:[]}, accCoords=[], accSegments=[];
+
+        if (!ignoreStart) {
+          try {
+            const leg = await apiFunc(start, firstPoi, profile);
+            const diff = leg.distKm - idealDistPerLeg;
+            initialCost = diff * diff; 
+            if (usePathAccumulation || saveToCache) {
+                if(leg.rawStats) accStats = leg.rawStats;
+                if(leg.rawFeature) {
+                    accCoords = leg.rawFeature.geometry.coordinates;
+                    accSegments = leg.rawFeature.properties.segments;
+                }
+            }
+          } catch(e) {}
+        }
+        currentPaths[i] = {
+          picks: [firstPoi],
+          currentCost: initialCost,
+          lastNode: firstPoi,
+          valid: true,
+          accStats, accCoords, accSegments
+        };
+      }
+
+      // Step 1..T-1
+      for (let t = 1; t < T; t++) {
+        if (options.onProgress) options.onProgress(t, T);
+        const nextGroup = groups[t];
+        const nextPaths = new Array(nextGroup.length).fill(null);
+        for (let j = 0; j < nextGroup.length; j++) {
+          const nextPoi = nextGroup[j];
+          let bestCost = Infinity, bestPath = null;
+          for (let i = 0; i < currentPaths.length; i++) {
+            const parent = currentPaths[i];
+            if (!parent || !parent.valid) continue;
+            try {
+              await new Promise(r => setTimeout(r, 20)); 
+              const leg = await apiFunc(parent.lastNode, nextPoi, profile);
+              const diff = leg.distKm - idealDistPerLeg;
+              const newCost = parent.currentCost + (diff * diff);
+              if (newCost < bestCost) {
+                bestCost = newCost;
+                bestPath = {
+                  picks: [...parent.picks, nextPoi],
+                  currentCost: newCost,
+                  lastNode: nextPoi,
+                  valid: true,
+                };
+                if (usePathAccumulation || saveToCache) {
+                   bestPath.accStats = mergeStats(parent.accStats, leg.rawStats);
+                   bestPath.accCoords = mergeCoords(parent.accCoords, leg.rawFeature?.geometry?.coordinates);
+                   bestPath.accSegments = mergeSegments(parent.accSegments, leg.rawFeature?.properties?.segments);
+                }
+              }
+            } catch (e) {}
+          }
+          nextPaths[j] = bestPath;
+        }
+        currentPaths = nextPaths;
+      }
+      candidates = currentPaths.filter(p => p && p.valid);
+  }
+
+  // --- Phase 1 終了時点の計測 ---
+  const tPhase1End = performance.now();
+  const orsPhase1End = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitPhase1End = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
+  // キャッシュ保存用データ (Phase 1 のコストのみ)
+  // もしキャッシュ利用中なら、保存されていたコストをそのまま使う
+  let phase1Breakdown = cachedBreakdown; 
+  if (!phase1Breakdown) {
+      phase1Breakdown = {
+          ors: orsPhase1End - orsStart,
+          wait: waitPhase1End - waitStart,
+          time: tPhase1End - tStart
+      };
+  }
+
+  // キャッシュ保存
+  if (saveToCache && candidates) {
+      window.__viterbiIntermediateCache = {
+          type: currentCacheType,
+          candidates: candidates,
+          breakdown: phase1Breakdown // Phase 1コストを保存
+      };
+      console.log(`[Viterbi] Candidates & breakdown cached (${currentCacheType}).`);
+  }
+
+
+  // --- [Phase 2] 仕上げ (Finalize / Rerank / Draw) ---
+  const finalResults = [];
+  
+  // Phase 2 開始
+  const tPhase2Start = performance.now();
+  const orsPhase2Start = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitPhase2Start = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
+  if (usePathAccumulation && candidates.length > 0) {
+    // A. パス累積モード (通常、順位決定に関わるのでDecisionに含む)
     for (const cand of candidates) {
         try { 
           const leg = await apiFunc(cand.lastNode, goal, profile);
-          // ★Edge記録 (ID付き - Goal)
-          recordViterbiEdge({
-            t: T,
-            fromId: getPoiId(cand.lastNode), toId: getPoiId(goal), // ID
-            fromName: cand.lastNode.name,    toName: goal.name,
-            distKm: leg.distKm, timeMin: leg.timeMin, energyKj: leg.energyKj,
-            cost: 0,
-            idealEnergyKj: ideals.idealEnergyPerLeg
+          
+          const mergeStats = (s1, s2) => ({
+             dist:   [...(s1?.dist||[]),   ...(s2?.dist||[])],
+             time:   [...(s1?.time||[]),   ...(s2?.time||[])],
+             energy: [...(s1?.energy||[]), ...(s2?.energy||[])]
           });
-        } catch(e) {}
+          const baseStats = cand.accStats || {dist:[],time:[],energy:[]};
+          const baseCoords = cand.accCoords || [];
+          const baseSegs = cand.accSegments || [];
+          const finalStats = mergeStats(baseStats, leg.rawStats);
+          const finalCoords = (baseCoords.length) ? baseCoords.concat((leg.rawFeature?.geometry?.coordinates||[]).slice(1)) : leg.rawFeature?.geometry?.coordinates;
+          const finalSegments = [...baseSegs, ...(leg.rawFeature?.properties?.segments||[])];
+          let sumSq=0, count=0;
+          finalSegments.forEach(seg => {
+             const d=(Number(seg.distance)||0)/1000;
+             sumSq += Math.pow(d - idealDistPerLeg, 2);
+             count++;
+          });
+          const totalMse = (count>0) ? sumSq/count : Infinity;
+          const constructedFeature = {
+              type: "Feature", properties: { summary: { distance: finalSegments.reduce((s,x)=>s+(x.distance||0),0), duration: finalSegments.reduce((s,x)=>s+(x.duration||0),0) }, segments: finalSegments },
+              geometry: { type: "LineString", coordinates: finalCoords }
+          };
+          finalResults.push({
+             rank: 0, score: totalMse, displayScore: totalMse,
+             poi_names: cand.picks.map(p => p.name).join(' -> '),
+             poi_latlngs: cand.picks.map(p => `${p.lat},${p.lon}`).join(' | '),
+             sigmaEnergy: stdDev(finalStats.energy), dist: finalStats.dist, stats: finalStats,
+             picks: cand.picks, feature: constructedFeature 
+          });
+        } catch(e) { console.error(e); }
     }
+  } 
+  else if (candidates.length > 0) {
+     // B. 従来モード (再ランク or SG排除)
+     if (!ignoreGoalEdge) {
+         for (const cand of candidates) {
+             try { await apiFunc(cand.lastNode, goal, profile); } catch(e) {}
+         }
+     }
+     const ranked = await finalizeAndRank(start, goal, candidates, idealDistPerLeg, profile, { 
+        includeGoalScore: !ignoreGoalInRank,
+        useAccumulatedCost: ignoreGoalInRank,
+        onlyInternal: ignoreGoalInRank 
+     });
+     ranked.forEach(r => finalResults.push(r));
   }
 
-  return finalizeAndRank(start, goal, candidates, idealDistPerLeg, profile, { 
-    includeGoalScore: !ignoreGoalInRank,
-    useAccumulatedCost: ignoreGoalInRank 
-  });
+  finalResults.sort((a, b) => (a.score ?? 1e9) - (b.score ?? 1e9));
+  finalResults.forEach((r, idx) => r.rank = idx + 1);
+
+  // --- 最終計測 & コスト振り分け ---
+  const tEnd = performance.now();
+  const orsEnd = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitEnd = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
+  // Phase 2 単体のコスト
+  const p2Ors  = orsEnd - orsPhase2Start;
+  const p2Wait = waitEnd - waitPhase2Start;
+  const p2Time = tEnd - tPhase2Start;
+
+  // ★振り分けロジックの核心
+  // Algo 6 (SG排除) -> ignoreGoalInRank=true -> Phase 2は「順位に影響しない描画」 -> Draw
+  // Algo 7 (再ランク) -> ignoreGoalInRank=false -> Phase 2は「真のスコア計算」 -> Search
+  
+  let finalSearchOrs, finalSearchWait, finalSearchTime;
+  let finalDrawOrs, finalDrawWait, finalDrawTime;
+
+  if (ignoreGoalInRank === true) {
+      // 6. SG排除: Phase 1だけが探索、Phase 2は描画
+      finalSearchOrs  = phase1Breakdown.ors;
+      finalSearchWait = phase1Breakdown.wait;
+      finalSearchTime = phase1Breakdown.time;
+      
+      finalDrawOrs  = p2Ors;
+      finalDrawWait = p2Wait;
+      finalDrawTime = p2Time;
+  } else {
+      // 7. 再ランク (他): Phase 1もPhase 2も「決定」に必要なコスト
+      finalSearchOrs  = phase1Breakdown.ors + p2Ors;
+      finalSearchWait = phase1Breakdown.wait + p2Wait;
+      finalSearchTime = phase1Breakdown.time + p2Time;
+      
+      finalDrawOrs  = 0;
+      finalDrawWait = 0;
+      finalDrawTime = 0;
+  }
+
+  // 戻り値に内訳を添付
+  finalResults._breakdown = {
+      searchOrs:  finalSearchOrs,
+      searchWait: finalSearchWait,
+      searchTime: finalSearchTime,
+      
+      drawOrs:  finalDrawOrs,
+      drawWait: finalDrawWait,
+      drawTime: finalDrawTime,
+
+      isCached: !!cachedBreakdown
+  };
+
+  return finalResults;
 }
 
+/* ==========================================================
+   【新規】マトリックス総当たり (API最小化・完全総当たり)
+   Step 1: 隣接する層の全ペア(エッジ)の距離をAPIで取得・記録
+   Step 2: 記録したデータを使って、CPU上で全組み合わせを計算・評価
+   ========================================================== */
+async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgress) {
+    const T = Array.isArray(restGroups) ? restGroups.length : 0;
+    if (!T) return [];
+
+    // --- [Phase 1] 全エッジのAPI計算 (Pre-calculation) ---
+    // 層の定義: [Start] -> [Group0] -> [Group1] ... -> [GroupT-1] -> [Goal]
+    const layers = [
+        [start],
+        ...restGroups.map(g => (Array.isArray(g.pois) ? g.pois : [])),
+        [goal]
+    ];
+
+    // エッジデータ格納用: edgeMatrix[layerIdx][fromIdx][toIdx] = { distKm, timeMin, energyKj, ... }
+    const edgeMatrix = []; 
+    
+    // 進捗計算用
+    let totalEdges = 0;
+    for(let i=0; i<layers.length-1; i++) totalEdges += layers[i].length * layers[i+1].length;
+    let computedEdges = 0;
+
+    const apiFunc = calcLegCostWithApi;
+
+    for (let i = 0; i < layers.length - 1; i++) {
+        edgeMatrix[i] = [];
+        const froms = layers[i];
+        const tos   = layers[i+1];
+
+        for (let f = 0; f < froms.length; f++) {
+            edgeMatrix[i][f] = [];
+            for (let t = 0; t < tos.length; t++) {
+                // 進捗更新
+                if (onProgress) onProgress(computedEdges, totalEdges);
+                
+                try {
+                    // API呼び出し (Wait含む)
+                    await new Promise(r => setTimeout(r, 20)); 
+                    const leg = await apiFunc(froms[f], tos[t], profile);
+                    
+                    // 必要なデータだけ軽量に保存
+                    edgeMatrix[i][f][t] = {
+                        dist: leg.distKm,
+                        time: leg.timeMin,
+                        energy: leg.energyKj,
+                        valid: true
+                    };
+                } catch (e) {
+                    // エラー時は無効マーク
+                    edgeMatrix[i][f][t] = { valid: false };
+                }
+                computedEdges++;
+            }
+        }
+    }
+
+    // --- [Phase 2] 記録データを使った総当たり (In-Memory Brute-force) ---
+    // ここからはAPIを呼ばないので高速です
+    const results = [];
+    
+    // 再帰で組み合わせを列挙
+    // currentPicks: 選んだPOIのインデックス列 (Startは含まない)
+    // currentIndices: エッジ特定用のインデックス列 [startIdx, g0Idx, g1Idx...]
+    function traverse(layerIdx, currentIndices, currentPicks, accStats) {
+        // ゴールまで到達したら評価
+        if (layerIdx === layers.length - 1) {
+            // ここで動的理想距離を用いたスコア計算を行う
+            
+            const dists = accStats.dist; // 各区間の距離配列
+            const n = dists.length;
+            if (n === 0) return;
+
+            // 1. 合計距離と理想値(平均)
+            const totalDist = dists.reduce((a,b)=>a+b, 0);
+            const idealDist = totalDist / n;
+
+            // 2. 分散(MSE)計算
+            let sumSq = 0;
+            dists.forEach(d => {
+                const diff = d - idealDist;
+                sumSq += diff * diff;
+            });
+            const score = sumSq / n;
+
+            results.push({
+                score: score,
+                rawScore: score,
+                picks: currentPicks.slice(), // コピー
+                stats: {
+                    dist: dists.slice(),
+                    time: accStats.time.slice(),
+                    energy: accStats.energy.slice()
+                },
+                // 注: feature(GeoJSON)はこの時点では作らない(重いため)。
+                // 選択された後に「ルート表示」ボタンで作る運用とする。
+                feature: null 
+            });
+            return;
+        }
+
+        // 次の層へ探索
+        const currentIdx = currentIndices[currentIndices.length - 1]; // 現在地のインデックス
+        const nextLayerIdx = layerIdx + 1;
+        const nextCandidates = layers[nextLayerIdx];
+
+        // 次の層の各候補についてループ
+        for (let nextIdx = 0; nextIdx < nextCandidates.length; nextIdx++) {
+            // エッジデータを取得
+            const edge = edgeMatrix[layerIdx][currentIdx][nextIdx];
+            
+            if (edge && edge.valid) {
+                // 統計情報を蓄積
+                const nextStats = {
+                    dist: [...accStats.dist, edge.dist],
+                    time: [...accStats.time, edge.time],
+                    energy: [...accStats.energy, edge.energy]
+                };
+
+                // POIリストの更新 (Start/Goalはpicksに入れないルールなら調整)
+                // layers[0]はStartなので、layerIdx=0の時のnextIdxはGroup0のPOI
+                // layers[last]はGoal
+                const nextPicks = [...currentPicks];
+                if (nextLayerIdx > 0 && nextLayerIdx < layers.length - 1) {
+                    nextPicks.push(nextCandidates[nextIdx]);
+                }
+
+                traverse(
+                    nextLayerIdx, 
+                    [...currentIndices, nextIdx], 
+                    nextPicks, 
+                    nextStats
+                );
+            }
+        }
+    }
+
+    // 探索開始 (Startは layers[0] の index 0)
+    traverse(0, [0], [], { dist:[], time:[], energy:[] });
+
+    // スコア順にソート
+    results.sort((a, b) => a.score - b.score);
+
+    // 順位付け
+    results.forEach((r, i) => r.rank = i + 1);
+
+    // APIコスト内訳 (探索=全エッジ, 描画=0)
+    results._breakdown = {
+        searchOrs: computedEdges,
+        searchWait: 0, // 簡易
+        searchTime: 0, // 簡易
+        drawOrs: 0, drawWait: 0, drawTime: 0,
+        isCached: false
+    };
+
+    return results;
+}
 /**
  * 【純粋ビームサーチ (Beam Search)】
  * 対策4（対策G）相当。Start/Goal考慮、Beam幅指定可。
  */
+// /* ==========================================================
+//    【修正版】純粋ビームサーチ (進捗表示対応)
+//    ========================================================== */
+// async function solveBeamSearch(start, goal, groups, profile, options = {}) {
+//   const T = Array.isArray(groups) ? groups.length : 0;
+//   if (!T) return [];
+
+//   const BEAM_WIDTH = options.beamWidth || 5;
+//   const ideals = getIdealPerLegs();
+//   const idealDistPerLeg = ideals.idealDistPerLeg; 
+//   const apiFunc = calcLegCostWithApi; 
+
+//   // Step 0
+//   let currentPaths = [];
+//   for (let i = 0; i < groups[0].length; i++) {
+//     const firstPoi = groups[0][i];
+//     try {
+//       const leg = await apiFunc(start, firstPoi, profile);
+//       const diff = leg.distKm - idealDistPerLeg;
+//       currentPaths.push({
+//         picks: [firstPoi],
+//         currentCost: diff * diff,
+//         lastNode: firstPoi,
+//         valid: true
+//       });
+//     } catch(e) {}
+//   }
+//   currentPaths.sort((a, b) => a.currentCost - b.currentCost);
+//   currentPaths = currentPaths.slice(0, BEAM_WIDTH);
+
+//   // Step 1..T-1
+//   for (let t = 1; t < T; t++) {
+//     // ★進捗報告
+//     if (options.onProgress) options.onProgress(t, T);
+
+//     const nextGroup = groups[t];
+//     let allCandidates = [];
+
+//     for (let i = 0; i < currentPaths.length; i++) {
+//       const parent = currentPaths[i];
+//       for (let j = 0; j < nextGroup.length; j++) {
+//         const nextPoi = nextGroup[j];
+//         try {
+//           await new Promise(r => setTimeout(r, 20));
+//           const leg = await apiFunc(parent.lastNode, nextPoi, profile);
+//           const diff = leg.distKm - idealDistPerLeg;
+//           const newCost = parent.currentCost + (diff * diff);
+
+//           allCandidates.push({
+//             picks: [...parent.picks, nextPoi],
+//             currentCost: newCost,
+//             lastNode: nextPoi,
+//             valid: true
+//           });
+//         } catch (e) {}
+//       }
+//     }
+//     allCandidates.sort((a, b) => a.currentCost - b.currentCost);
+//     currentPaths = allCandidates.slice(0, BEAM_WIDTH);
+//   }
+
+//   for (const cand of currentPaths) {
+//       try { await apiFunc(cand.lastNode, goal, profile); } catch(e) {}
+//   }
+
+//   return finalizeAndRank(start, goal, currentPaths, idealDistPerLeg, profile, { 
+//     includeGoalScore: true,
+//     useAccumulatedCost: false
+//   });
+// }
 /* ==========================================================
-   【修正版】純粋ビームサーチ (進捗表示対応)
+   【修正版】純粋ビームサーチ (計測内訳対応版)
    ========================================================== */
 async function solveBeamSearch(start, goal, groups, profile, options = {}) {
   const T = Array.isArray(groups) ? groups.length : 0;
@@ -4696,6 +4927,10 @@ async function solveBeamSearch(start, goal, groups, profile, options = {}) {
   const idealDistPerLeg = ideals.idealDistPerLeg; 
   const apiFunc = calcLegCostWithApi; 
 
+  const tStart = performance.now();
+  const orsStart = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitStart = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
   // Step 0
   let currentPaths = [];
   for (let i = 0; i < groups[0].length; i++) {
@@ -4704,10 +4939,7 @@ async function solveBeamSearch(start, goal, groups, profile, options = {}) {
       const leg = await apiFunc(start, firstPoi, profile);
       const diff = leg.distKm - idealDistPerLeg;
       currentPaths.push({
-        picks: [firstPoi],
-        currentCost: diff * diff,
-        lastNode: firstPoi,
-        valid: true
+        picks: [firstPoi], currentCost: diff * diff, lastNode: firstPoi, valid: true
       });
     } catch(e) {}
   }
@@ -4716,9 +4948,7 @@ async function solveBeamSearch(start, goal, groups, profile, options = {}) {
 
   // Step 1..T-1
   for (let t = 1; t < T; t++) {
-    // ★進捗報告
     if (options.onProgress) options.onProgress(t, T);
-
     const nextGroup = groups[t];
     let allCandidates = [];
 
@@ -4731,12 +4961,8 @@ async function solveBeamSearch(start, goal, groups, profile, options = {}) {
           const leg = await apiFunc(parent.lastNode, nextPoi, profile);
           const diff = leg.distKm - idealDistPerLeg;
           const newCost = parent.currentCost + (diff * diff);
-
           allCandidates.push({
-            picks: [...parent.picks, nextPoi],
-            currentCost: newCost,
-            lastNode: nextPoi,
-            valid: true
+            picks: [...parent.picks, nextPoi], currentCost: newCost, lastNode: nextPoi, valid: true
           });
         } catch (e) {}
       }
@@ -4745,16 +4971,39 @@ async function solveBeamSearch(start, goal, groups, profile, options = {}) {
     currentPaths = allCandidates.slice(0, BEAM_WIDTH);
   }
 
+  // --- 探索終了 ---
+  const tSearchEnd = performance.now();
+  const orsSearchEnd = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitSearchEnd = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
+  // 描画フェーズ
   for (const cand of currentPaths) {
       try { await apiFunc(cand.lastNode, goal, profile); } catch(e) {}
   }
 
-  return finalizeAndRank(start, goal, currentPaths, idealDistPerLeg, profile, { 
-    includeGoalScore: true,
-    useAccumulatedCost: false
+  const results = await finalizeAndRank(start, goal, currentPaths, idealDistPerLeg, profile, { 
+    includeGoalScore: true, useAccumulatedCost: false
   });
-}
 
+  // --- 全体終了 ---
+  const tEnd = performance.now();
+  const orsEnd = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
+  const waitEnd = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
+  results._breakdown = {
+      searchOrs:  orsSearchEnd - orsStart,
+      searchWait: waitSearchEnd - waitStart,
+      searchTime: tSearchEnd - tStart,
+      
+      drawOrs:  orsEnd - orsSearchEnd,
+      drawWait: waitEnd - waitSearchEnd,
+      drawTime: tEnd - tSearchEnd,
+      
+      isCached: false
+  };
+
+  return results;
+}
 /**
  * 【共通ヘルパー: リランク処理】
  * 候補ルートに対して最終スコアを計算し、順位付けして返します。
@@ -4762,153 +5011,187 @@ async function solveBeamSearch(start, goal, groups, profile, options = {}) {
  * @param options.useAccumulatedCost trueなら「探索中の累積コスト」をそのまま順位に使う
  */
 /* ==========================================================
-   【修正版】finalizeAndRank (区間MSEで正しく評価)
+   【修正版】finalizeAndRank (POIのみルート対応)
    ========================================================== */
 async function finalizeAndRank(start, goal, candidates, idealDist, profile, options = {}) {
   const includeGoalScore = options.includeGoalScore !== false;
   const useAccumulatedCost = options.useAccumulatedCost === true;
+  // ★追加: POI間のみのルートを引くフラグ
+  const onlyInternal = options.onlyInternal === true;
 
   const finalResults = [];
 
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
-    const waypoints = [start, ...candidate.picks, goal];
+    
+    // ★ルート構成点の作成
+    let waypoints;
+    if (onlyInternal) {
+        // Start/Goalを除外し、POIのみをつなぐ
+        waypoints = candidate.picks.filter(Boolean).map(p => ({
+            lat: p.lat, lon: p.lon, name: p.name || 'POI'
+        }));
+        // POIが2つ未満だとルートが引けないので、ガード（Start/Goalを入れるか、エラーにする）
+        if (waypoints.length < 2) {
+            // 仕方ないのでStart/Goalを入れる（またはスキップ）
+            waypoints = [start, ...candidate.picks, goal];
+        }
+    } else {
+        // 通常（Start -> POIs -> Goal）
+        waypoints = [start, ...candidate.picks, goal];
+    }
 
     try {
-      await new Promise(r => setTimeout(r, 100)); // API負荷軽減
+      await new Promise(r => setTimeout(r, 100)); 
       
-      // 全区間のルートを取得
       const out = await routeLegStatsForWaypoints(waypoints, profile);
       
-      // ★修正ポイント：細かいstatsではなく、区間(segments)から正しいMSEを計算する
-      // （runBruteforceOnce と同じロジックに統一）
-      let rankingScore;
-      
-      // 計算用のMSE（Start～Goal全区間）
+      // MSE計算
+      // onlyInternalの場合、idealDist（全体平均）と比べるのはフェアではないかもしれないが、
+      // 「全体のリズム」を維持できているか見る指標としてそのまま使う。
       const totalMse = calcDistMseFromFeature(out.feature, idealDist);
 
+      let rankingScore;
       if (useAccumulatedCost) {
-        // 「Goal無視」などの場合：探索時の累積コスト(SSE)をそのまま使う
-        // ※厳密には MSE(平均) と SSE(総和) で単位が異なりますが、
-        //   Goal無視の文脈では「探索で見つけた値」を尊重します。
         rankingScore = candidate.currentCost;
       } else {
-        // 「再ランク」の場合：正しく計算した全区間MSEを使う
         rankingScore = totalMse;
       }
 
       finalResults.push({
         rank: 0,
         score: rankingScore, 
-        displayScore: totalMse, // 表示用は常に「真の全区間MSE」
+        displayScore: totalMse,
         poi_names: candidate.picks.map(p => p.name).join(' -> '),
         poi_latlngs: candidate.picks.map(p => `${p.lat},${p.lon}`).join(' | '),
         sigmaEnergy: stdDev(out.stats.energy),
         dist: out.stats.dist,
         picks: candidate.picks,
         stats: out.stats,
-        feature: out.feature // 地図表示用
+        feature: out.feature 
       });
     } catch (e) {
       console.warn("Ranking failed", e);
     }
   }
 
-  // スコアが小さい順にソート
   finalResults.sort((a, b) => (a.score ?? 1e9) - (b.score ?? 1e9));
   finalResults.forEach((r, idx) => r.rank = idx + 1);
   
   return finalResults;
 }
 
-
 /* =====================================================================
    【整理版】アルゴリズム比較・統合ロジック
    UI/機能はそのままに、共通処理をまとめて記述量を削減
    ===================================================================== */
 
-/* ===== 【修正版】アルゴリズム定義 (進捗コールバック対応) ===== */
+/* ===== 【修正版】アルゴリズム定義 (6,7番のキャッシュ・省略設定を追加) ===== */
 const ALGO_CONFIG = [
-  // 1. 総当たり (独自の進捗表示を持つのでそのまま)
+  // 1. 総当たり
   { id: 'dbg_bf', label: '1. 総当たり', func: runBruteforceOnce },
 
-  // 2. 純粋Viterbi (標準)
-  { id: 'dbg_vit_pure', label: '2. 純粋Viterbi (標準)', 
-    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { onProgress: cb }) },
+  // 2. 純粋Viterbi (高速) -> 保存
+  { id: 'dbg_vit_pure', label: '2. 純粋Viterbi (高速)', 
+    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { 
+        usePathAccumulation: true, 
+        saveToCache: true,      // 保存
+        onProgress: cb 
+    }) 
+  },
 
-  // 3. 直線比較 (一瞬なのでそのまま)
-  { id: 'dbg_linear', label: '3. 直線比較', type: 'linear' }, 
+  // 3. 純粋Viterbi + 再ランク -> 利用
+  { id: 'dbg_vit_pure_rerank', label: '3. 純粋Viterbi + 再ランク', 
+    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { 
+        usePathAccumulation: false, 
+        tryUseCache: true,      // 利用
+        onProgress: cb 
+    }) 
+  },
 
-  // 4. 純粋ビームサーチ
-  { id: 'dbg_beam', label: '4. 純粋ビーム', 
+  // 4. 直線
+  { id: 'dbg_linear', label: '4. 直線比較', type: 'linear' }, 
+
+  // 5. ビーム
+  { id: 'dbg_beam', label: '5. 純粋ビーム', 
     func: (s,g,gr,p, cb) => solveBeamSearch(s,g,gr,p, { beamWidth:5, onProgress: cb }) },
 
-  // 5. SG排除Vit
-  { id: 'dbg_vit_sg_excl', label: '5. SG排除Vit', 
-    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { ignoreStart:true, ignoreGoalInRank:true, onProgress: cb }) },
+  // 6. SG排除Vit -> ★保存 & Goal計算スキップ
+  { id: 'dbg_vit_sg_excl', label: '6. SG排除・純粋Viterbi', 
+    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { 
+        ignoreStart:true, 
+        ignoreGoalInRank:true, 
+        ignoreGoalEdge: true,   // ★API節約：Goal区間を計算しない
+        saveToCache: true,      // ★保存
+        onProgress: cb 
+    }) 
+  },
 
-  // 6. SG排除+再ランク
-  { id: 'dbg_vit_sg_excl_rerank', label: '6. SG排除+再ランク', 
-    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { ignoreStart:true, onProgress: cb }) },
+  // 7. SG排除+再ランク -> ★利用 & 再評価
+  { id: 'dbg_vit_sg_excl_rerank', label: '7. SG排除+再ランク', 
+    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { 
+        ignoreStart:true, 
+        ignoreGoalEdge: true,   // ★キャッシュ条件一致のため必要
+        tryUseCache: true,      // ★利用
+        onProgress: cb 
+    }) 
+  },
+{ 
+    id: 'dbg_matrix_bf', 
+    label: '8. マトリックス総当たり (推奨)', 
+    func: (s,g,gr,p, cb) => solveMatrixBruteforce(s,g,gr,p, cb)
+  },
 ];
-
+  
+function isAlgoEnabled(id){
+  const el = document.getElementById(id);
+  return !!(el && el.checked);
+}
 /* ======================================================
-   【修正版】メイン実行関数 (API回数表示 & CSV記録対応)
+   【完全修正版】メイン実行関数 (詳細内訳表示対応)
    ====================================================== */
 async function runAlgoCompareDebug(){
   const panel = $('algoComparePanel');
   panel.textContent = '';
   window.__algoCompareRows = [];
-  const tTotal = performance.now();
+  window.__viterbiIntermediateCache = null;
 
-  // 共通チェック
+  const tTotalStart = performance.now();
+
   if (!routeData?.fastest) return panel.textContent = 'ルート・POIを先に検索してください。';
   if (!restGroups?.length) return panel.textContent = '休憩トリガーがありません。';
 
-  ensureProjections(); // 射影計算
+  ensureProjections(); 
   const start = pts.find(p => p.type === 'start') || pts[0];
   const goal  = pts.find(p => p.type === 'goal')  || pts[pts.length - 1];
   const profile = 'cycling-road';
   const cap = Math.max(1, Number($('poiLimit')?.value) || 5);
-  
-  // 候補作成
   const targetGroups = makeCandGroupsFromRestGroups(restGroups, cap);
   let bfRankMap = null; 
 
-  panel.textContent += '====== アルゴリズム比較 (7種・進捗対応版) ======\n\n';
+  panel.textContent += '====== アルゴリズム比較 (詳細内訳版) ======\n\n';
 
   for (const cfg of ALGO_CONFIG) {
     if (!isAlgoEnabled(cfg.id)) continue;
-
-    // アルゴリズム名を表示
     panel.textContent += `${cfg.label}...`; 
     
-    // 進捗表示用コールバック (例: ..1/4..2/4)
     const onProgress = (cur, total) => {
-        if (total) panel.textContent += `..${cur}/${total}`;
-        else panel.textContent += '.';
+        if (total) panel.textContent += `..${cur}/${total}`; else panel.textContent += '.';
     };
-
-    // 待機 (API負荷軽減)
     await new Promise(r => setTimeout(r, (cfg.id==='dbg_linear' ? 100 : 2000)));
 
-    const t0 = performance.now();
-    
-    // ★APIカウント記録 (開始前)
-    const orsBefore = (typeof API_USED !== 'undefined') ? API_USED.orsTotal : 0;
-    const ovBefore  = (typeof API_USED !== 'undefined') ? API_USED.overpassTotal : 0;
-    
-    let list = [];
-
     try {
+      let list = [];
       if (cfg.type === 'linear') {
         const linGroups = topPoisPerTriggerForLinear(5);
         list = buildLinearAlgoRows(start, goal, linGroups);
+        // 直線はAPIを使わないのでダミーデータ
+        list._breakdown = { searchOrs:0, drawOrs:0, searchTime:0, drawTime:0, searchWait:0, drawWait:0 };
       } else {
-        // ★ここで onProgress を渡す
         list = await cfg.func(start, goal, targetGroups, profile, onProgress);
       }
 
+      // ランク付与
       if (cfg.id === 'dbg_bf') {
         bfRankMap = buildBfRankMap(list);
         attachBfRank(list, bfRankMap);
@@ -4917,20 +5200,37 @@ async function runAlgoCompareDebug(){
         attachBfRank(list, bfRankMap);
       }
 
-      const ms = performance.now() - t0;
-      const sec = ms / 1000;
+      // --- 内訳表示ロジック ---
+      const bd = list._breakdown || { searchOrs:0, drawOrs:0, searchTime:0, drawTime:0, searchWait:0, drawWait:0 };
       
-      // ★APIカウント差分計算 (終了後 - 開始前)
-      const orsDiff = (typeof API_USED !== 'undefined') ? (API_USED.orsTotal - orsBefore) : 0;
-      const ovDiff  = (typeof API_USED !== 'undefined') ? (API_USED.overpassTotal - ovBefore) : 0;
-      
-      // ★パネル表示に回数を追加 (ORS:〇回 / Ov:〇回)
-      panel.textContent += ` (${sec.toFixed(2)}s | ORS:${orsDiff} / Ov:${ovDiff})\n`;
+      // 合計値
+      const totalOrs  = bd.searchOrs + bd.drawOrs;
+      const totalWait = bd.searchWait + bd.drawWait;
+      const totalTime = bd.searchTime + bd.drawTime; // 経過時間の合計
+      const activeTime = Math.max(0, totalTime - totalWait); // 実処理時間
+
+      // 秒変換
+      const sTotal  = (totalTime / 1000).toFixed(1);
+      const sActive = (activeTime / 1000).toFixed(1);
+      const sWait   = (totalWait / 1000).toFixed(1);
+
+      let logStr = `\n  API: ${totalOrs} (探${bd.searchOrs}+描${bd.drawOrs})`;
+      logStr    += ` | Time: ${sTotal}s (処理${sActive}+待${sWait})`;
+
+      if (bd.isCached) {
+          logStr += ` [Cache利用]`;
+          // キャッシュ利用時は、今回の実測時間(=描画時間)も併記すると親切
+          const realSec = (bd.drawTime / 1000).toFixed(1);
+          logStr += ` (今回実測: ${realSec}s)`;
+      }
+
+      panel.textContent += logStr + '\n';
+
+      // CSV出力用 (合計値で出力)
+      pushAlgoResultsForCsv(cfg.id, cfg.label, list, totalTime, totalOrs, 0);
 
       if (list.length) {
         showAlgoListInPanel(panel, list.slice(0, 5), cfg.id);
-        // CSV出力用関数にもAPI回数を渡す
-        pushAlgoResultsForCsv(cfg.id, cfg.label, list, ms, orsDiff, ovDiff);
       } else {
         panel.textContent += '(候補なし)\n';
       }
@@ -4941,34 +5241,40 @@ async function runAlgoCompareDebug(){
     }
   }
 
-  const totalMs = performance.now() - tTotal;
-  const totalSec = totalMs / 1000;
+  const totalSec = (performance.now() - tTotalStart) / 1000;
   panel.textContent += `\n====== 完了 (Total: ${totalSec.toFixed(2)}s) ======\n`;
 }
+  
 /* ==========================================================
-   【重要】区間データ(Segments)から正しくMSEスコアを計算する関数
-   stats(細かいステップ)を使うと値が狂うため、必ずこれを使う
+   【変更版】コスト計算 (そのルートの実測総距離を基準にする)
    ========================================================== */
-function calcDistMseFromFeature(feature, idealDistPerLeg) {
+function calcDistMseFromFeature(feature, _unusedFixedIdeal) {
   const segments = feature?.properties?.segments || [];
   
   if (!segments || segments.length === 0) {
-    return Infinity; // データがない場合は最悪値
+    return Infinity;
   }
 
+  // 1. このルート自体の総距離を計算
+  let totalKm = 0;
+  segments.forEach(seg => {
+    totalKm += (Number(seg.distance) || 0) / 1000;
+  });
+
+  // 2. このルートにおける「理想の区間距離」を動的に算出
+  //    (総距離 ÷ 区間数)
+  const dynamicIdealDist = totalKm / segments.length;
+
+  // 3. MSE計算 (各区間と、動的理想距離との差)
   let sumSq = 0;
   segments.forEach(seg => {
-    // APIの単位はmなのでkmに変換
     const dKm = (Number(seg.distance) || 0) / 1000;
-    const diff = dKm - idealDistPerLeg;
+    const diff = dKm - dynamicIdealDist;
     sumSq += diff * diff;
   });
 
   return sumSq / segments.length;
 }
-/* ==========================================================
-   【追加機能】POI ID生成 & CSV出力 (ID対応版)
-   ========================================================== */
 
 /* ==========================================================
    【修正統合版】データ出力・ログ記録関数セット
@@ -5043,7 +5349,7 @@ function downloadAlgoCompareCsv(){
 }
 // 4. Edge(Viterbi)用: API呼び出し＆IDログ記録
 /* ==========================================================
-   【修正版】API呼び出し＆ログ記録 (理想距離対応)
+   【修正版】API呼び出し＆ログ記録 (パス累積用データ返却対応)
    ========================================================== */
 async function calcLegCostWithApi(from, to, profile){
   if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
@@ -5066,11 +5372,10 @@ async function calcLegCostWithApi(from, to, profile){
   }
 
   const wps = [ { lat: fromLat, lon: fromLon }, { lat: toLat, lon: toLon } ];
-
-  // ★理想値取得
   const ideals = (typeof getIdealPerLegs === 'function') ? getIdealPerLegs() : { idealDistPerLeg: 0, idealEnergyPerLeg: 0 };
 
   try {
+    // API呼び出し
     const out = await routeLegStatsForWaypoints(wps, profile);
     const summary = out?.feature?.properties?.summary || {};
 
@@ -5086,38 +5391,40 @@ async function calcLegCostWithApi(from, to, profile){
       energyKj = Number(ene);
     }
 
+    // ログ記録
     if (window.__collectViterbiEdges) {
       window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
       window.__viterbiAllEdgeRows.push({
-        fromId, toId,
-        fromName, toName,
+        fromId, toId, fromName, toName,
         fromLat, fromLon, toLat, toLon,
         distKm, timeMin, energyKj,
         profile,
         ms: Math.round(performance.now() - t0),
         ok: true,
         errMsg: '',
-        // ★保存
         idealDistKm: ideals.idealDistPerLeg,
         idealEnergyKj: ideals.idealEnergyPerLeg
       });
     }
 
-    return { total: distKm, distKm, timeMin, energyKj };
+    return { 
+        total: distKm, distKm, timeMin, energyKj,
+        // ★追加: 累積用に生データも返す
+        rawFeature: out.feature,
+        rawStats: out.stats
+    };
 
   } catch (e) {
     if (window.__collectViterbiEdges) {
       window.__viterbiAllEdgeRows = window.__viterbiAllEdgeRows || [];
       window.__viterbiAllEdgeRows.push({
-        fromId, toId,
-        fromName, toName,
+        fromId, toId, fromName, toName,
         fromLat, fromLon, toLat, toLon,
         distKm: '', timeMin: '', energyKj: '',
         profile,
         ms: Math.round(performance.now() - t0),
         ok: false,
         errMsg: String(e?.message || e),
-        // ★保存
         idealDistKm: ideals.idealDistPerLeg,
         idealEnergyKj: ideals.idealEnergyPerLeg
       });
@@ -5125,7 +5432,6 @@ async function calcLegCostWithApi(from, to, profile){
     throw e;
   }
 }
-
 // 5. Edge(Viterbi)用: CSVダウンロード (ID列追加)
 function downloadViterbiLogCsv() {
   const rows = window.__viterbiAllEdgeRows || [];
@@ -5179,9 +5485,3 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
-
-
-
-
-
-
