@@ -4683,30 +4683,44 @@ async function solveViterbiGeneric(start, goal, groups, profile, options = {}) {
 }
 
 /* ==========================================================
-   【新規】マトリックス総当たり (API最小化・完全総当たり)
-   Step 1: 隣接する層の全ペア(エッジ)の距離をAPIで取得・記録
-   Step 2: 記録したデータを使って、CPU上で全組み合わせを計算・評価
+   【修正版】マトリックス総当たり (データ形式バグ修正済み)
    ========================================================== */
 async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgress) {
     const T = Array.isArray(restGroups) ? restGroups.length : 0;
     if (!T) return [];
 
     // --- [Phase 1] 全エッジのAPI計算 (Pre-calculation) ---
-    // 層の定義: [Start] -> [Group0] -> [Group1] ... -> [GroupT-1] -> [Goal]
+    // ★修正: restGroups が [[poi...], [poi...]] (配列の配列) で来ても
+    //         [{pois:[...]}] (オブジェクトの配列) で来ても対応できるように修正
     const layers = [
         [start],
-        ...restGroups.map(g => (Array.isArray(g.pois) ? g.pois : [])),
+        ...restGroups.map(g => {
+            if (Array.isArray(g)) return g;            // 配列ならそのまま使う
+            if (g && Array.isArray(g.pois)) return g.pois; // オブジェクトなら .pois を使う
+            return [];
+        }),
         [goal]
     ];
 
-    // エッジデータ格納用: edgeMatrix[layerIdx][fromIdx][toIdx] = { distKm, timeMin, energyKj, ... }
+    // エッジデータ格納用
     const edgeMatrix = []; 
     
     // 進捗計算用
     let totalEdges = 0;
-    for(let i=0; i<layers.length-1; i++) totalEdges += layers[i].length * layers[i+1].length;
-    let computedEdges = 0;
+    for(let i=0; i<layers.length-1; i++) {
+        const len = layers[i].length * layers[i+1].length;
+        totalEdges += len;
+        // デバッグログ: 各層のつながり数を確認
+        // console.log(`Layer ${i}->${i+1}: ${layers[i].length} x ${layers[i+1].length} = ${len} edges`);
+    }
 
+    // ★もしここで totalEdges が 0 なら、データ連携がうまくいっていない
+    if (totalEdges === 0) {
+        console.warn("[MatrixBF] Edge count is 0. Check layers:", layers);
+        return []; // 早期リターン
+    }
+
+    let computedEdges = 0;
     const apiFunc = calcLegCostWithApi;
 
     for (let i = 0; i < layers.length - 1; i++) {
@@ -4717,15 +4731,12 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
         for (let f = 0; f < froms.length; f++) {
             edgeMatrix[i][f] = [];
             for (let t = 0; t < tos.length; t++) {
-                // 進捗更新
                 if (onProgress) onProgress(computedEdges, totalEdges);
                 
                 try {
-                    // API呼び出し (Wait含む)
                     await new Promise(r => setTimeout(r, 20)); 
                     const leg = await apiFunc(froms[f], tos[t], profile);
                     
-                    // 必要なデータだけ軽量に保存
                     edgeMatrix[i][f][t] = {
                         dist: leg.distKm,
                         time: leg.timeMin,
@@ -4733,7 +4744,6 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
                         valid: true
                     };
                 } catch (e) {
-                    // エラー時は無効マーク
                     edgeMatrix[i][f][t] = { valid: false };
                 }
                 computedEdges++;
@@ -4741,27 +4751,20 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
         }
     }
 
-    // --- [Phase 2] 記録データを使った総当たり (In-Memory Brute-force) ---
-    // ここからはAPIを呼ばないので高速です
+    // --- [Phase 2] 記録データを使った総当たり (In-Memory) ---
     const results = [];
     
-    // 再帰で組み合わせを列挙
-    // currentPicks: 選んだPOIのインデックス列 (Startは含まない)
-    // currentIndices: エッジ特定用のインデックス列 [startIdx, g0Idx, g1Idx...]
     function traverse(layerIdx, currentIndices, currentPicks, accStats) {
-        // ゴールまで到達したら評価
         if (layerIdx === layers.length - 1) {
-            // ここで動的理想距離を用いたスコア計算を行う
-            
-            const dists = accStats.dist; // 各区間の距離配列
+            const dists = accStats.dist;
             const n = dists.length;
             if (n === 0) return;
 
-            // 1. 合計距離と理想値(平均)
+            // 動的理想距離 (このルートの平均)
             const totalDist = dists.reduce((a,b)=>a+b, 0);
             const idealDist = totalDist / n;
 
-            // 2. 分散(MSE)計算
+            // 分散(MSE)計算
             let sumSq = 0;
             dists.forEach(d => {
                 const diff = d - idealDist;
@@ -4772,41 +4775,33 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
             results.push({
                 score: score,
                 rawScore: score,
-                picks: currentPicks.slice(), // コピー
+                picks: currentPicks.slice(),
                 stats: {
                     dist: dists.slice(),
                     time: accStats.time.slice(),
                     energy: accStats.energy.slice()
                 },
-                // 注: feature(GeoJSON)はこの時点では作らない(重いため)。
-                // 選択された後に「ルート表示」ボタンで作る運用とする。
                 feature: null 
             });
             return;
         }
 
-        // 次の層へ探索
-        const currentIdx = currentIndices[currentIndices.length - 1]; // 現在地のインデックス
+        const currentIdx = currentIndices[currentIndices.length - 1];
         const nextLayerIdx = layerIdx + 1;
         const nextCandidates = layers[nextLayerIdx];
 
-        // 次の層の各候補についてループ
         for (let nextIdx = 0; nextIdx < nextCandidates.length; nextIdx++) {
-            // エッジデータを取得
             const edge = edgeMatrix[layerIdx][currentIdx][nextIdx];
             
             if (edge && edge.valid) {
-                // 統計情報を蓄積
                 const nextStats = {
                     dist: [...accStats.dist, edge.dist],
                     time: [...accStats.time, edge.time],
                     energy: [...accStats.energy, edge.energy]
                 };
 
-                // POIリストの更新 (Start/Goalはpicksに入れないルールなら調整)
-                // layers[0]はStartなので、layerIdx=0の時のnextIdxはGroup0のPOI
-                // layers[last]はGoal
                 const nextPicks = [...currentPicks];
+                // 中間地点のみ picks に追加 (Start/Goalは除外)
                 if (nextLayerIdx > 0 && nextLayerIdx < layers.length - 1) {
                     nextPicks.push(nextCandidates[nextIdx]);
                 }
@@ -4821,20 +4816,15 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
         }
     }
 
-    // 探索開始 (Startは layers[0] の index 0)
     traverse(0, [0], [], { dist:[], time:[], energy:[] });
 
-    // スコア順にソート
     results.sort((a, b) => a.score - b.score);
-
-    // 順位付け
     results.forEach((r, i) => r.rank = i + 1);
 
-    // APIコスト内訳 (探索=全エッジ, 描画=0)
     results._breakdown = {
         searchOrs: computedEdges,
-        searchWait: 0, // 簡易
-        searchTime: 0, // 簡易
+        searchWait: 0,
+        searchTime: 0,
         drawOrs: 0, drawWait: 0, drawTime: 0,
         isCached: false
     };
@@ -5485,3 +5475,4 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
+
