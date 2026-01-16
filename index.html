@@ -5337,12 +5337,35 @@ function downloadAlgoCompareCsv(){
   const blob = buildCsvBlob(header, bodyRows);
   downloadBlob(blob, 'algo_compare_debug.csv');
 }
+
+/* ====== キャッシュシステム ====== */
+// すでに計算した区間データを保存する辞書
+const __sharedLegCache = new Map();
+
+// キャッシュのキーを作る関数（座標を丸めて同一判定しやすくする）
+function getLegCacheKey(from, to, profile) {
+    const f = n => Number(n).toFixed(5); // 1m単位の精度で丸める
+    const fLat = from.lat ?? from.latitude ?? from.y;
+    const fLon = from.lon ?? from.lng ?? from.longitude ?? from.x;
+    const tLat = to.lat ?? to.latitude ?? to.y;
+    const tLon = to.lon ?? to.lng ?? to.longitude ?? to.x;
+    
+    return `${profile}|${f(fLat)},${f(fLon)}|${f(tLat)},${f(tLon)}`;
+}
 // 4. Edge(Viterbi)用: API呼び出し＆IDログ記録
 /* ==========================================================
-   【修正版】API呼び出し＆ログ記録 (パス累積用データ返却対応)
+   【キャッシュ対応版】API呼び出し＆ログ記録
+   Viterbiで計算したエッジを保存し、マトリックス総当たり等で再利用します
    ========================================================== */
 async function calcLegCostWithApi(from, to, profile){
   if (!from || !to) throw new Error('calcLegCostWithApi: from/to が不正です');
+
+  // ★1. キャッシュチェック
+  // すでに計算済みの区間なら、APIを呼ばずに即座に結果を返す
+  const cacheKey = getLegCacheKey(from, to, profile);
+  if (__sharedLegCache.has(cacheKey)) {
+      return __sharedLegCache.get(cacheKey);
+  }
 
   const t0 = performance.now();
 
@@ -5397,12 +5420,18 @@ async function calcLegCostWithApi(from, to, profile){
       });
     }
 
-    return { 
+    const result = { 
         total: distKm, distKm, timeMin, energyKj,
-        // ★追加: 累積用に生データも返す
+        // 累積用に生データも返す
         rawFeature: out.feature,
         rawStats: out.stats
     };
+
+    // ★2. 結果をキャッシュに保存
+    // 次回同じ区間がリクエストされたら、ここを通らずに上部のif文で返る
+    __sharedLegCache.set(cacheKey, result);
+
+    return result;
 
   } catch (e) {
     if (window.__collectViterbiEdges) {
@@ -5475,6 +5504,7 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
+
 
 
 
