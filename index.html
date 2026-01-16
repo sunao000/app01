@@ -4683,41 +4683,36 @@ async function solveViterbiGeneric(start, goal, groups, profile, options = {}) {
 }
 
 /* ==========================================================
-   【修正版】マトリックス総当たり (データ形式バグ修正済み)
+   【完全版】マトリックス総当たり (時間計測機能付き)
    ========================================================== */
 async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgress) {
     const T = Array.isArray(restGroups) ? restGroups.length : 0;
     if (!T) return [];
 
-    // --- [Phase 1] 全エッジのAPI計算 (Pre-calculation) ---
-    // ★修正: restGroups が [[poi...], [poi...]] (配列の配列) で来ても
-    //         [{pois:[...]}] (オブジェクトの配列) で来ても対応できるように修正
+    // ★計測開始
+    const tStart = performance.now();
+    const waitStart = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+
+    // --- [Phase 1] 全エッジのAPI計算 ---
     const layers = [
         [start],
         ...restGroups.map(g => {
-            if (Array.isArray(g)) return g;            // 配列ならそのまま使う
-            if (g && Array.isArray(g.pois)) return g.pois; // オブジェクトなら .pois を使う
+            if (Array.isArray(g)) return g;            
+            if (g && Array.isArray(g.pois)) return g.pois; 
             return [];
         }),
         [goal]
     ];
 
-    // エッジデータ格納用
     const edgeMatrix = []; 
-    
-    // 進捗計算用
     let totalEdges = 0;
     for(let i=0; i<layers.length-1; i++) {
-        const len = layers[i].length * layers[i+1].length;
-        totalEdges += len;
-        // デバッグログ: 各層のつながり数を確認
-        // console.log(`Layer ${i}->${i+1}: ${layers[i].length} x ${layers[i+1].length} = ${len} edges`);
+        totalEdges += layers[i].length * layers[i+1].length;
     }
 
-    // ★もしここで totalEdges が 0 なら、データ連携がうまくいっていない
     if (totalEdges === 0) {
-        console.warn("[MatrixBF] Edge count is 0. Check layers:", layers);
-        return []; // 早期リターン
+        console.warn("[MatrixBF] Edge count is 0.");
+        return [];
     }
 
     let computedEdges = 0;
@@ -4751,7 +4746,7 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
         }
     }
 
-    // --- [Phase 2] 記録データを使った総当たり (In-Memory) ---
+    // --- [Phase 2] 総当たり計算 ---
     const results = [];
     
     function traverse(layerIdx, currentIndices, currentPicks, accStats) {
@@ -4760,11 +4755,9 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
             const n = dists.length;
             if (n === 0) return;
 
-            // 動的理想距離 (このルートの平均)
             const totalDist = dists.reduce((a,b)=>a+b, 0);
             const idealDist = totalDist / n;
 
-            // 分散(MSE)計算
             let sumSq = 0;
             dists.forEach(d => {
                 const diff = d - idealDist;
@@ -4801,7 +4794,6 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
                 };
 
                 const nextPicks = [...currentPicks];
-                // 中間地点のみ picks に追加 (Start/Goalは除外)
                 if (nextLayerIdx > 0 && nextLayerIdx < layers.length - 1) {
                     nextPicks.push(nextCandidates[nextIdx]);
                 }
@@ -4821,10 +4813,18 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
     results.sort((a, b) => a.score - b.score);
     results.forEach((r, i) => r.rank = i + 1);
 
+    // ★計測終了
+    const tEnd = performance.now();
+    const waitEnd = (typeof API_USED !== 'undefined') ? API_USED.waitTotal : 0;
+    
+    // ★差分計算
+    const searchTime = tEnd - tStart;
+    const searchWait = waitEnd - waitStart;
+
     results._breakdown = {
         searchOrs: computedEdges,
-        searchWait: 0,
-        searchTime: 0,
+        searchWait: searchWait, // ここに値が入るようになります
+        searchTime: searchTime, // ここに値が入るようになります
         drawOrs: 0, drawWait: 0, drawTime: 0,
         isCached: false
     };
@@ -5475,4 +5475,5 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
+
 
