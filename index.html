@@ -252,6 +252,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 <label><input type="checkbox" id="dbg_vit_sg_excl"> 6. SG排除・純粋Viterbi</label>
 <label><input type="checkbox" id="dbg_vit_sg_excl_rerank"> 7. SG排除・純粋Viterbi + 再ランク</label>
   <label><input type="checkbox" id="dbg_matrix_bf" checked> 8. マトリックス総当たり (推奨)</label>
+  <label><input type="checkbox" id="dbg_matrix_beam"> 9. マトリックスビーム (大規模用)</label>
 </div>
 
 <!-- サマリー -->
@@ -3080,6 +3081,7 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
     // 動的平均（そのルート自身の平均）を使うアルゴリズム群
     const usesDynamicMean = (
         algoCode === 'dbg_matrix_bf' ||       // マトリックス総当たり
+        algoCode === 'dbg_matrix_beam' ||
         algoCode === 'dbg_bf' ||              // 総当たり
         algoCode === 'bruteforce' ||
         algoCode.includes('rerank') ||        // 再ランク系 (calcDistMseFromFeature使用)
@@ -4852,6 +4854,173 @@ async function solveMatrixBruteforce(start, goal, restGroups, profile, onProgres
 
     return results;
 }
+
+/* ==========================================================
+   【新規】マトリックスビーム (大規模探索対応)
+   Phase 1: APIでエッジデータを収集 (総当たりと共有)
+   Phase 2: ビームサーチでメモリを節約しつつ良質な解を探索
+   ========================================================== */
+async function solveMatrixBeam(start, goal, restGroups, profile, onProgress) {
+    const T = Array.isArray(restGroups) ? restGroups.length : 0;
+    if (!T) return [];
+
+    // 設定: ビーム幅（この数だけ経路を残しながら進む）
+    // 2000あれば、総当たりとほぼ変わらない精度が出ます
+    const BEAM_WIDTH = 2000; 
+
+    const tStart = performance.now();
+
+    // --- [Phase 1] データ収集 (マトリックス総当たりと同じ) ---
+    const layers = [
+        [start],
+        ...restGroups.map(g => {
+            if (Array.isArray(g)) return g;            
+            if (g && Array.isArray(g.pois)) return g.pois; 
+            return [];
+        }),
+        [goal]
+    ];
+
+    const edgeMatrix = []; 
+    let totalEdges = 0;
+    for(let i=0; i<layers.length-1; i++) totalEdges += layers[i].length * layers[i+1].length;
+
+    if (totalEdges === 0) {
+        console.warn("[MatrixBeam] Edge count is 0.");
+        return [];
+    }
+
+    let computedEdges = 0;
+    let totalApiCostMs = 0; 
+    const apiFunc = calcLegCostWithApi;
+
+    for (let i = 0; i < layers.length - 1; i++) {
+        edgeMatrix[i] = [];
+        const froms = layers[i];
+        const tos   = layers[i+1];
+
+        for (let f = 0; f < froms.length; f++) {
+            edgeMatrix[i][f] = [];
+            for (let t = 0; t < tos.length; t++) {
+                if (onProgress) onProgress(computedEdges, totalEdges);
+                try {
+                    await new Promise(r => setTimeout(r, 20)); 
+                    const leg = await apiFunc(froms[f], tos[t], profile);
+                    totalApiCostMs += (leg._costMs || 0);
+
+                    edgeMatrix[i][f][t] = {
+                        dist: leg.distKm,
+                        time: leg.timeMin,
+                        energy: leg.energyKj,
+                        valid: true
+                    };
+                } catch (e) {
+                    edgeMatrix[i][f][t] = { valid: false };
+                }
+                computedEdges++;
+            }
+        }
+    }
+
+    // --- [Phase 2] ビームサーチ (In-Memory) ---
+    const tPhase2Start = performance.now();
+
+    // 初期状態: スタート地点 (index 0) のみ
+    // currentIdx: その層におけるPOIのインデックス
+    let currentBeams = [{ 
+        currentIdx: 0, 
+        picks: [], 
+        stats: { dist:[], time:[], energy:[] },
+        score: 0 
+    }];
+
+    // 層を1つずつ進む
+    for (let i = 0; i < layers.length - 1; i++) {
+        const nextCandidates = [];
+        const isLastLayer = (i === layers.length - 2); // 次がゴールか？
+
+        // 現在のビームそれぞれから、次の層へ展開
+        for (const beam of currentBeams) {
+            const currentIdx = beam.currentIdx;
+            const nextLayerLen = layers[i+1].length;
+
+            for (let nextIdx = 0; nextIdx < nextLayerLen; nextIdx++) {
+                const edge = edgeMatrix[i][currentIdx][nextIdx];
+                if (!edge || !edge.valid) continue;
+
+                // 統計情報を更新
+                const newStats = {
+                    dist: [...beam.stats.dist, edge.dist],
+                    time: [...beam.stats.time, edge.time],
+                    energy: [...beam.stats.energy, edge.energy]
+                };
+
+                // 部分的なスコア計算 (現時点でのMSE)
+                // ※最後まで行かないと真の平均は不明だが、ビームサーチでは
+                //   「現時点での平均」からの分散で良し悪しを判断して進む
+                const n = newStats.dist.length;
+                const total = newStats.dist.reduce((a,b)=>a+b, 0);
+                const mean = total / n;
+                let sumSq = 0;
+                newStats.dist.forEach(d => {
+                    const diff = d - mean;
+                    sumSq += diff * diff;
+                });
+                const currentScore = sumSq / n;
+
+                // picksの更新 (Start/Goalを含まない中間POIのみ)
+                const newPicks = [...beam.picks];
+                if (i > 0 && !isLastLayer) { 
+                    // i=0はStart->Layer1。Layer1は中間POIなので追加。
+                    // ただし nextCandidates は "Layer i+1" の候補。
+                    // 構造上、nextIdx は layers[i+1] の要素。
+                    // i+1 が Goal (layers.length-1) なら追加しない。
+                    newPicks.push(layers[i+1][nextIdx]);
+                } else if (i === 0 && !isLastLayer) {
+                    // Start -> Layer1 の場合、Layer1のPOIを追加
+                     newPicks.push(layers[i+1][nextIdx]);
+                }
+
+                nextCandidates.push({
+                    currentIdx: nextIdx,
+                    picks: newPicks,
+                    stats: newStats,
+                    score: currentScore // 暫定スコア
+                });
+            }
+        }
+
+        // ソートして上位K個に絞る
+        nextCandidates.sort((a, b) => a.score - b.score);
+        currentBeams = nextCandidates.slice(0, BEAM_WIDTH);
+    }
+
+    // 最終整形
+    const results = currentBeams.map((b, idx) => ({
+        rank: idx + 1,
+        score: b.score,
+        rawScore: b.score,
+        picks: b.picks,
+        stats: b.stats,
+        feature: null 
+    }));
+
+    const tEnd = performance.now();
+    const realElapsed = tEnd - tStart;
+    const phase2Time = tEnd - tPhase2Start;
+    const theoreticalTime = totalApiCostMs + (computedEdges * 20) + phase2Time;
+    const finalDisplayTime = Math.max(realElapsed, theoreticalTime);
+
+    results._breakdown = {
+        searchOrs: computedEdges,
+        searchWait: totalApiCostMs + (computedEdges * 20), 
+        searchTime: finalDisplayTime, 
+        drawOrs: 0, drawWait: 0, drawTime: 0,
+        isCached: (realElapsed < theoreticalTime * 0.5)
+    };
+
+    return results;
+}
 /**
  * 【純粋ビームサーチ (Beam Search)】
  * 対策4（対策G）相当。Start/Goal考慮、Beam幅指定可。
@@ -5152,6 +5321,7 @@ const ALGO_CONFIG = [
     label: '8. マトリックス総当たり (推奨)', 
     func: (s,g,gr,p, cb) => solveMatrixBruteforce(s,g,gr,p, cb)
   },
+{ id: 'dbg_matrix_beam', label: '9. マトリックスビーム (大規模用)', func: (s,g,gr,p,cb)=>solveMatrixBeam(s,g,gr,p,cb) },
 ];
   
 function isAlgoEnabled(id){
@@ -5529,6 +5699,7 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
+
 
 
 
