@@ -3050,7 +3050,8 @@ async function showLinearComboRoute(row){
 }
 
 /* ==========================================================
-   【修正版】データ蓄積・CSV出力関数 (実際に使った理想距離を出力)
+   【修正版】データ蓄積・CSV出力関数
+   アルゴリズムの実態に合わせて「計算に使われた理想距離」を適切に出力します。
    ========================================================== */
 function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls, overpassCalls){
   if (!Array.isArray(resultList) || !resultList.length) return;
@@ -3058,37 +3059,43 @@ function pushAlgoResultsForCsv(algoCode, label, resultList, elapsedMs, orsCalls,
 
   const sorted = resultList.slice().sort((a, b) => (a.score ?? 9e9) - (b.score ?? 9e9));
   
-  const isFullOutput = (algoCode === 'bruteforce' || algoCode === 'dbg_bf' || algoCode === 'linear' || algoCode === 'dbg_linear');
+  // 総当たり系やマトリックス総当たりは全件出力、それ以外はトップ3
+  const isFullOutput = (
+      algoCode === 'bruteforce' || algoCode === 'dbg_bf' || 
+      algoCode === 'linear' || algoCode === 'dbg_linear' ||
+      algoCode === 'dbg_matrix_bf' // マトリックス総当たりも全件出す
+  );
   let outputList = isFullOutput ? sorted : sorted.slice(0, 3);
 
-  // 初期固定値（Viterbi等の基準）
+  // 固定の理想値（事前の全体平均）
   const fixedIdeals = (typeof getIdealPerLegs === 'function') ? getIdealPerLegs() : { idealDistPerLeg: 0 };
 
   outputList.forEach((r, idx)=>{
     const rank = idx + 1;
     const stats = r.stats || { dist:[] };
     
-    // ★修正: アルゴリズムや計算実態に合わせて「実際に使った平均距離」を算出する
+    // ★修正: アルゴリズムごとの「理想距離」の定義分け
     let usedIdealDist = fixedIdeals.idealDistPerLeg;
 
-    if (algoCode === 'dbg_bf' || algoCode === 'bruteforce' || algoCode === 'dbg_linear') {
-        // 総当たり系は「自分自身の平均」を使っているはず
+    // 動的平均（そのルート自身の平均）を使うアルゴリズム群
+    const usesDynamicMean = (
+        algoCode === 'dbg_matrix_bf' ||       // マトリックス総当たり
+        algoCode === 'dbg_bf' ||              // 総当たり
+        algoCode === 'bruteforce' ||
+        algoCode.includes('rerank') ||        // 再ランク系 (calcDistMseFromFeature使用)
+        algoCode === 'dbg_beam' ||            // ビームサーチ (finalizeAndRank使用)
+        algoCode.includes('linear')           // 直線
+    );
+
+    if (usesDynamicMean) {
+        // stats.dist から実測の平均を算出
         if (stats.dist && stats.dist.length > 0) {
             const sum = stats.dist.reduce((a,b)=>a+(Number(b)||0), 0);
             usedIdealDist = sum / stats.dist.length;
         }
-    } else if (r.score === r.displayScore && stats.dist && stats.dist.length) {
-        // 再ランク系などで、スコアがMSE計算と一致する場合、念のため実測平均を確認
-        // (Viterbi探索中は固定値だが、最終結果リストに入っているスコアが「再ランク後」なら実測平均になっている可能性があるため)
-        // ここでは「固定値」と「実測平均」のどちらがスコアに近いかで判定するロジックも組めるが、
-        // シンプルに「Viterbi探索結果」としては固定値を表示し、
-        // 再ランク(rerank)済みなら実測平均を表示するのが親切。
-        
-        if (algoCode.includes('rerank')) {
-             const sum = stats.dist.reduce((a,b)=>a+(Number(b)||0), 0);
-             usedIdealDist = sum / stats.dist.length;
-        }
-    }
+    } 
+    // 純粋Viterbi (dbg_vit_pure) などは、探索時に固定理想値を使っているため
+    // fixedIdeals.idealDistPerLeg のままでOK
 
     const sigmaDist   = stdDev(stats.dist || []);
     const sigmaTime   = stdDev(stats.time || []);
@@ -5522,6 +5529,7 @@ window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 </script>
 </body>
 </html>
+
 
 
 
