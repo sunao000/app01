@@ -200,7 +200,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   <div style="font-weight:bold; margin-bottom:4px; color:#555;">比較するアルゴリズム</div>
   <label><input type="checkbox" id="dbg_bf" checked> 1. 総当たり (Ground Truth)</label>
   <label><input type="checkbox" id="dbg_vit_pure" checked> 2. 純粋Viterbi (高速)</label>
-  <label><input type="checkbox" id="dbg_vit_pure_rerank" checked> 3. 純粋Viterbi + 再ランク</label>
+  <label><input type="checkbox" id="dbg_adaptive_vit" checked> 3. 適応型Viterbi (平均更新)</label>
   <label><input type="checkbox" id="dbg_list_bf" checked> 4. リスト総当たり (推奨)</label>
   <label><input type="checkbox" id="dbg_list_beam" checked> 5. リストビーム (大規模用)</label>
 </div>
@@ -215,7 +215,8 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 
 <script>
 /* ====== 設定 ====== */
-const ORS_KEY  = ''; 
+const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
+// const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
 const ORS_ROOT = 'https://api.openrouteservice.org';
 
 const ORS_INTERVAL = 2500;
@@ -3968,13 +3969,11 @@ const ALGO_CONFIG = [
     }) 
   },
 
-  // 3. 純粋Viterbi + 再ランク (上記キャッシュを利用してGoalまで計算)
-  { id: 'dbg_vit_pure_rerank', label: '3. 純粋Viterbi + 再ランク', 
-    func: (s,g,gr,p, cb) => solveViterbiGeneric(s,g,gr,p, { 
-        usePathAccumulation: false, 
-        tryUseCache: true,      // 利用
-        onProgress: cb 
-    }) 
+// 3. 適応型Viterbi
+  { 
+    id: 'dbg_adaptive_vit', 
+    label: '3. 適応型Viterbi (平均更新)', 
+    func: (s,g,gr,p,cb) => solveAdaptiveMeanViterbi(s,g,gr,p,cb) 
   },
 
   // 4. リスト総当たり (キャッシュ効率最大・推奨)
@@ -4327,6 +4326,158 @@ function downloadViterbiLogCsv() {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+/* ==========================================================
+   【新規】適応型Viterbi (Adaptive Mean Viterbi)
+   理想値 L を使わず、ステップごとの累積データから
+   「その時点での平均」に基づく分散(SSE)を最小化するDP
+   ========================================================== */
+async function solveAdaptiveMeanViterbi(start, goal, restGroups, profile, onProgress) {
+    const T = Array.isArray(restGroups) ? restGroups.length : 0;
+    if (!T) return [];
+
+    // 層の構築: [Start] -> [Group1] -> ... -> [GroupT] -> [Goal]
+    const layers = [
+        [start],
+        ...restGroups.map(g => {
+            if (Array.isArray(g)) return g;
+            if (g && Array.isArray(g.pois)) return g.pois;
+            return [];
+        }),
+        [goal]
+    ];
+
+    // DPテーブル初期化
+    // dp[layerIdx][nodeIdx] = { cost(SSE), sumD, sumSq, parentIdx, picks, stats }
+    let dp = new Array(layers[0].length).fill(null).map(() => ({
+        cost: 0,
+        sumD: 0,
+        sumSq: 0,
+        picks: [],
+        stats: { dist: [], time: [] }
+    }));
+
+    const apiFunc = calcLegCostWithApi;
+    let computedEdges = 0;
+
+    // --- DP遷移 ---
+    for (let i = 0; i < layers.length - 1; i++) {
+        const fromLayer = layers[i];
+        const toLayer = layers[i + 1];
+        const nextDp = new Array(toLayer.length).fill(null);
+        
+        // 現在の区間数 (1始まり)
+        const currentStepCount = i + 1;
+
+        for (let t = 0; t < toLayer.length; t++) {
+            const toNode = toLayer[t];
+            let bestEntry = null;
+
+            for (let f = 0; f < fromLayer.length; f++) {
+                const prevEntry = dp[f];
+                if (!prevEntry) continue; // 到達不可
+
+                const fromNode = fromLayer[f];
+                if (onProgress) onProgress(computedEdges, 0); // Totalは概算が難しいため0
+
+                try {
+                    // API呼び出し (キャッシュ有効)
+                    // ※ await new Promise(r => setTimeout(r, 0)); // 必要ならUIブロック回避
+                    const leg = await apiFunc(fromNode, toNode, profile);
+                    computedEdges++;
+
+                    const d = leg.distKm;
+                    const newSumD = prevEntry.sumD + d;
+                    const newSumSq = prevEntry.sumSq + (d * d);
+
+                    // ★ここが核心: 動的平均に基づくSSE (Sum of Squared Errors) の計算
+                    // SSE = Σx^2 - (Σx)^2 / n
+                    // これが最小＝その時点での平均値まわりの分散が最小
+                    const currentSSE = newSumSq - ((newSumD * newSumD) / currentStepCount);
+
+                    // より「ばらつきが少ない」経路があれば更新
+                    if (bestEntry === null || currentSSE < bestEntry.cost) {
+                        bestEntry = {
+                            cost: currentSSE, // これを最小化指標とする
+                            sumD: newSumD,
+                            sumSq: newSumSq,
+                            stats: {
+                                dist: [...prevEntry.stats.dist, d],
+                                time: [...prevEntry.stats.time, leg.timeMin]
+                            },
+                            picks: (i === 0) ? [] : [...prevEntry.picks, fromNode] // Startはpicksに含まない
+                        };
+                    }
+
+                } catch (e) {
+                    // ルート取得失敗時はスキップ
+                }
+            }
+            nextDp[t] = bestEntry;
+        }
+        dp = nextDp;
+    }
+
+    // --- 結果構築 ---
+    // Goal層に到達したエントリを集計
+    const results = [];
+    const fixedIdeals = (typeof getIdealPerLegs === 'function') ? getIdealPerLegs() : { idealDistPerLeg: 0 };
+    const idealL = fixedIdeals.idealDistPerLeg;
+
+    dp.forEach((entry, idx) => {
+        if (!entry) return;
+
+        // 最終的な区間数
+        const n = entry.stats.dist.length;
+        if (n === 0) return;
+
+        // 1. 真のスコア (MSE = SSE / n)
+        const mse = entry.cost / n;
+
+        // 2. 探索スコア
+        // このアルゴリズムにとっての「探索スコア」は、動的平均に対するMSEそのものです。
+        // 固定理想値Lを使ったペナルティはありません。
+        const searchScore = mse; 
+
+        // 3. Bias (理論的解釈)
+        // ユーザー様の式: S_Beam = S_BF + Bias
+        // ここでは S_Adaptive = S_BF なので、Biasは定義上 0 になります。
+        // ただし、CSV比較用に「固定理想値L」との乖離を計算して入れておくと面白いです。
+        const actualMean = entry.sumD / n;
+        const biasFromFixedL = Math.pow(idealL - actualMean, 2);
+
+        results.push({
+            mse_score: mse,
+            search_score: searchScore,
+            bias_cost: 0, // アルゴリズム内部のバイアスはゼロ
+            
+            // 参考: 固定理想値Lから見るとどれくらいズレたか
+            // (これをCSVのbias列に出すと、Beamとの比較で「Beamがなぜ負けたか」がわかります)
+            // bias_cost: biasFromFixedL, 
+
+            rawScore: entry.cost, // SSE
+            picks: entry.picks,
+            stats: entry.stats,
+            feature: null
+        });
+    });
+
+    // ソート
+    results.sort((a, b) => a.mse_score - b.mse_score);
+    results.forEach((r, i) => r.rank = i + 1);
+
+    results._breakdown = {
+        searchOrs: computedEdges,
+        searchWait: 0,
+        searchTime: 0,
+        drawOrs: 0,
+        drawWait: 0,
+        drawTime: 0,
+        isCached: true
+    };
+
+    return results;
 }
 
 // 互換性維持
