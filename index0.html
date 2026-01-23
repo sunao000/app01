@@ -201,8 +201,8 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
   <label><input type="checkbox" id="dbg_bf" checked> 1. 総当たり (Ground Truth)</label>
   <label><input type="checkbox" id="dbg_vit_pure" checked> 2. 純粋Viterbi (高速)</label>
   <label><input type="checkbox" id="dbg_adaptive_vit" checked> 3. 適応型Viterbi (平均更新)</label>
-  <label><input type="checkbox" id="dbg_list_bf" checked> 4. リスト総当たり (推奨)</label>
-  <label><input type="checkbox" id="dbg_list_beam" checked> 5. リストビーム (大規模用)</label>
+  <label><input type="checkbox" id="dbg_list_bf"> 4. リスト総当たり (推奨)</label>
+  <label><input type="checkbox" id="dbg_list_beam"> 5. リストビーム (大規模用)</label>
 </div>
 
 <!-- サマリー -->
@@ -215,8 +215,7 @@ button.del{background:#d9534f;color:#fff;border:none;border-radius:4px;padding:0
 
 <script>
 /* ====== 設定 ====== */
-const ORS_KEY  = '5b3ce3597851110001cf62481af47799d9c344bf86dd4b340f9f9ff9'; 
-// const ORS_KEY  = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjE0YTgxN2M5OWZmNjQ4MmNiMTZkYTk3YWFkMDI2MDAxIiwiaCI6Im11cm11cjY0In0=';
+const ORS_KEY  = '';
 const ORS_ROOT = 'https://api.openrouteservice.org';
 
 const ORS_INTERVAL = 2500;
@@ -860,8 +859,8 @@ async function drawRoutes(){
     const rests = await makeRestPoints(baseFeature, mass, flat);
     tEnd(tkRest, `hits=${rests.length}`);
 
-
     restGroups = (rests || []).map(r => ({ rest: r, pois: [] }));
+    window.restGroups = restGroups;
 
     restList = []; // 前回のリストをリセット
 
@@ -1082,21 +1081,25 @@ function makeRestPoints(feature) {
   return results;
 }
 
-/* ===== 区間統計（各ルート） ===== */
+/* ==========================================================
+   【修正版】区間統計（各ルート）
+   ※ ステップ単位ではなく、セグメント（休憩地点間）単位で集計するように修正
+   ========================================================== */
 async function calcLegStats(feature, _unusedMass, _unusedFlat){
-  const coords = feature.geometry.coordinates;
-  const segs   = feature.properties.segments || [];
+  const segs = feature.properties.segments || [];
 
   const legDist = [], legTime = [];
+  
+  // 修正箇所: stepsのループを削除し、segmentsのdistance/durationを直接使う
   for (const s of segs) {
-    for (const step of (s.steps || [])) {
-      const d  = step.distance || 0;  // m
-      const t  = step.duration || 0;  // s
+      const d = s.distance || 0; // m
+      const t = s.duration || 0; // s
+      
       legDist.push(d / 1000); // km
       legTime.push(t / 60);   // min
-    }
   }
-  return { dist:legDist, time:legTime };
+  
+  return { dist: legDist, time: legTime };
 }
 
 function summaryStats(arr){
@@ -2916,288 +2919,275 @@ function getGlobalRestGroups() {
   return [];
 }
 
-// 1. セレクトボックスのUIを更新する関数
+// 【改造版】UI更新：A/B 2つのセレクトボックスを作成
 function updateManualRouteUI() {
-  console.log('[ManualRoute] updateManualRouteUI called');
+  console.log('[ManualRoute] updateManualRouteUI (Compare A/B) called');
   
   const container = document.getElementById('manualRouteSelectors');
   if (!container) return;
   container.innerHTML = '';
 
-  const groups = getGlobalRestGroups();
-  console.log('[ManualRoute] restGroups count:', groups.length);
-
+  const groups = (typeof getGlobalRestGroups === 'function') ? getGlobalRestGroups() : (window.restGroups || []);
+  
   if (!groups || !groups.length) {
-    container.innerHTML = '<span style="color:red;">データが見つかりません。<br>1. 「休憩場所検索」を実行してください。<br>2. それでも出ない場合はこの上の「更新」ボタンを押してください。</span>';
+    container.innerHTML = '<span style="color:red;">データが見つかりません。先に「休憩場所検索」を実行してください。</span>';
     return;
   }
 
-  // トリガーごとにセレクトボックス作成
+  // ヘッダー（A / B）
+  const header = document.createElement('div');
+  header.style.display = 'grid';
+  header.style.gridTemplateColumns = '80px 1fr 1fr';
+  header.style.gap = '8px';
+  header.style.marginBottom = '4px';
+  header.style.fontWeight = 'bold';
+  header.style.fontSize = '0.9rem';
+  header.innerHTML = `
+    <div></div>
+    <div style="color:#0055aa; text-align:center;">プランA (青)</div>
+    <div style="color:#aa0000; text-align:center;">プランB (赤)</div>
+  `;
+  container.appendChild(header);
+
+  // 各トリガーの行作成
   groups.forEach((g, idx) => {
     const row = document.createElement('div');
-    row.style.display = 'flex';
-    row.style.alignItems = 'center';
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = '80px 1fr 1fr';
     row.style.gap = '8px';
+    row.style.marginBottom = '6px';
+    row.style.alignItems = 'center';
 
-    const label = document.createElement('span');
-    label.textContent = `トリガー#${idx + 1}:`;
-    label.style.minWidth = '70px';
-    label.style.fontWeight = 'bold';
+    // ラベル
+    const label = document.createElement('div');
+    label.textContent = `休憩#${idx + 1}`;
+    label.style.fontSize = '0.85rem';
 
-    const select = document.createElement('select');
-    select.id = `manualSel_${idx}`;
-    select.style.flex = '1';
-
-    // 候補POIをoptionに追加
-    const pois = Array.isArray(g.pois) ? g.pois : [];
-    
-    if (pois.length === 0) {
-      const opt = document.createElement('option');
-      opt.text = '(候補なし)';
-      opt.value = -1;
-      select.add(opt);
-      select.disabled = true;
-    } else {
-      pois.forEach((p, pIdx) => {
-        const name = p.name || `POI${idx}_${pIdx}`;
+    // プルダウン作成ヘルパー
+    const createSelect = (idSuffix) => {
+      const select = document.createElement('select');
+      select.id = `manualSel${idSuffix}_${idx}`;
+      select.style.width = '100%';
+      
+      const pois = Array.isArray(g.pois) ? g.pois : [];
+      if (pois.length === 0) {
         const opt = document.createElement('option');
-        opt.text = name;
-        opt.value = pIdx;
+        opt.text = '(なし)';
+        opt.value = -1;
         select.add(opt);
-      });
-      select.selectedIndex = 0;
-    }
+        select.disabled = true;
+      } else {
+        pois.forEach((p, pIdx) => {
+          const name = p.name || `POI${idx}_${pIdx}`;
+          const dist = (typeof p.distFromTriggerM === 'number') ? `(${formatDist(p.distFromTriggerM)})` : '';
+          const opt = document.createElement('option');
+          opt.text = `${name} ${dist}`;
+          opt.value = pIdx;
+          select.add(opt);
+        });
+        select.selectedIndex = 0; // デフォルト0番目
+      }
+      return select;
+    };
+
+    const selA = createSelect('A');
+    const selB = createSelect('B');
+
+    // Bの方はデフォルトで（あれば）2番目を選択しておくなど、変化をつける
+    if (selB.options.length > 1) selB.selectedIndex = 1;
 
     row.appendChild(label);
-    row.appendChild(select);
+    row.appendChild(selA);
+    row.appendChild(selB);
     container.appendChild(row);
   });
   
-  console.log('[ManualRoute] UI updated successfully');
+  // ボタンのテキスト変更（HTML側のID btnDrawManualRoute のテキストを変える）
+  const btn = document.getElementById('btnDrawManualRoute');
+  if(btn) btn.textContent = 'プランA vs プランB を比較描画';
+
+  // 不要なチェックボックスを隠す（今回はルート同士の比較なのでBatch/Segの選択は隠蔽してBatch固定にする）
+  const chkBatch = document.getElementById('chkManBatch');
+  const chkSeg = document.getElementById('chkManSeg');
+  if(chkBatch && chkBatch.parentElement) chkBatch.parentElement.style.display='none';
+  if(chkSeg && chkSeg.parentElement) chkSeg.parentElement.style.display='none';
 }
 /* ==============================================
    【改良版】手動ルート比較機能（分散・標準偏差の表示追加）
    ============================================== */
+// 【修正版】プランA vs プランB 比較実行 (getBoundsエラー修正済み)
 window.drawManualComparison = async function() {
-  console.log('[ManualRoute] Start');
+  console.log('[ManualRoute] Compare A/B Start');
   const infoBox = document.getElementById('manualRouteInfo');
   const btn = document.getElementById('btnDrawManualRoute');
-  const profile = document.getElementById('profileSelect')?.value || 'cycling-road'; 
-
-  const safeNum = (v) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-
-  // 標準偏差計算ヘルパー
-  const calcSigma = (legs) => {
-    const dists = legs.map(l => l.dist);
-    if (!dists.length) return 0;
-    const mean = dists.reduce((a,b)=>a+b,0) / dists.length;
-    const v = dists.reduce((s,d)=>s+(d-mean)**2, 0) / dists.length;
-    return Math.sqrt(v);
-  };
+  const profile = document.getElementById('profileSelect')?.value || 'cycling-road';
 
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '初期化中...';
+    btn.textContent = '計算中...';
   }
-  if (infoBox) infoBox.textContent = '準備中...';
+  if (infoBox) infoBox.textContent = 'ルート計算中...';
+
+  // マップ初期化
+  if (typeof clearRouteLayers === 'function') clearRouteLayers();
+  if (typeof markerLayer !== 'undefined') markerLayer.clearLayers();
+  if (typeof clearRestBeams === 'function') clearRestBeams();
+
+  // ★★★ 修正箇所: L.layerGroup() ではなく L.featureGroup() を使う ★★★
+  if (typeof manualRouteLayerGroup === 'undefined' || manualRouteLayerGroup === null) {
+    manualRouteLayerGroup = L.featureGroup().addTo(map); 
+  } else {
+    manualRouteLayerGroup.clearLayers();
+  }
+
+  // ユーティリティ: 標準偏差計算
+  const calcSigmaFromStats = (distArr) => {
+    if (!distArr || !distArr.length) return 0;
+    const m = distArr.reduce((a,b)=>a+b,0) / distArr.length;
+    const v = distArr.reduce((s,x)=>s+(x-m)**2,0) / distArr.length;
+    return Math.sqrt(v);
+  };
 
   try {
-    let groups = [];
-    if (typeof getGlobalRestGroups === 'function') groups = getGlobalRestGroups();
-    else if (window.restGroups) groups = window.restGroups;
+    const groups = (typeof getGlobalRestGroups === 'function') ? getGlobalRestGroups() : (window.restGroups || []);
+    if (!groups.length) throw new Error('データがありません');
 
-    if (!groups || !groups.length) throw new Error('休憩トリガーデータがありません。');
-    
-    // 選択されたPOIの収集
-    const picks = [];
-    for (let i = 0; i < groups.length; i++) {
-      const sel = document.getElementById(`manualSel_${i}`);
-      if (!sel || sel.disabled || sel.value == -1) throw new Error(`トリガー#${i+1} のPOIが選択されていません。`);
-      const p = groups[i].pois[Number(sel.value)];
-      if (!p) throw new Error(`データエラー: 選択されたPOIが見つかりません。`);
-      picks.push(p);
-    }
-
-    // 地図クリア処理
-    if (typeof clearRouteLayers === 'function') clearRouteLayers();
-    if (typeof markerLayer !== 'undefined') markerLayer.clearLayers();
-    if (typeof clearRestBeams === 'function') clearRestBeams();
-    if (typeof manualRouteLayerGroup === 'undefined' || manualRouteLayerGroup === null) {
-      manualRouteLayerGroup = L.layerGroup().addTo(map);
-    } else {
-      manualRouteLayerGroup.clearLayers();
-    }
-
-    if (btn) btn.textContent = 'ルート計算中...';
-    
     const start = pts.find(p => p.type === 'start') || pts[0];
     const goal = pts.find(p => p.type === 'goal') || pts[pts.length - 1];
-    
-    const showBatch = document.getElementById('chkManBatch')?.checked;
-    const showSeg   = document.getElementById('chkManSeg')?.checked;
-    
-    const batchLegs = [];
-    const segLegs   = [];
 
-    // --- A. 一括 (Batch) ---
-    if (showBatch) {
-      const wps = [start, ...picks, goal].map(p => ({ lat: p.lat, lon: p.lon, name: p.name || 'WP' }));
-      const out = await routeLegStatsForWaypoints(wps, profile);
-      
-      if (out && out.feature) {
-        L.geoJSON(out.feature, {
-          style: { color: '#0055aa', weight: 8, opacity: 0.6 }
-        }).bindTooltip("一括ルート").addTo(manualRouteLayerGroup);
-        
-        const segments = out.feature.properties.segments || [];
-        segments.forEach((seg) => {
-           batchLegs.push({
-               dist: safeNum(seg.distance) / 1000,
-               time: safeNum(seg.duration) / 60
-           });
-        });
-      }
-    }
-
-    // --- B. 区間積上 (Segmented) ---
-    if (showSeg) {
-      const points = [start, ...picks, goal];
-      for (let i = 0; i < points.length - 1; i++) {
-        const from = points[i];
-        const to = points[i+1];
-        let legRes = { dist:0, time:0 };
-        try {
-          if (typeof calcLegCostWithApi === 'function') {
-             const leg = await calcLegCostWithApi(from, to, profile);
-             const d = leg.distKm ?? leg.dist_km ?? leg.dist ?? 0;
-             const t = leg.timeMin ?? leg.time_min ?? leg.time ?? 0;
-             legRes = { dist: safeNum(d), time: safeNum(t) };
-
-             // 描画
-             if (leg.rawFeature) {
-                 L.geoJSON(leg.rawFeature, {
-                   style: { color: '#aa0000', weight: 4, dashArray: '10, 10', opacity: 1.0 }
-                 }).bindTooltip(`区間 ${i+1}`).addTo(manualRouteLayerGroup);
-             } else {
-                 // キャッシュがない場合は簡易描画（本来ここには来ないはず）
-                 const res = await dir({ coordinates: [[from.lon, from.lat], [to.lon, to.lat]], elevation:true }, profile);
-                 if(res?.features?.[0]) {
-                     L.geoJSON(res.features[0], {
-                       style: { color: '#aa0000', weight: 4, dashArray: '10, 10', opacity: 1.0 }
-                     }).bindTooltip(`区間 ${i+1}`).addTo(manualRouteLayerGroup);
-                 }
-             }
-          }
-        } catch(err) { console.error(err); }
-        segLegs.push(legRes);
-      }
-    }
-
-    // --- 結果表示 (HTML生成) ---
-    const fmt = (n, d=1) => safeNum(n).toFixed(d);
-    
-    // 統計計算
-    const sumBatch = batchLegs.reduce((a,b)=>({dist:a.dist+b.dist, time:a.time+b.time}), {dist:0,time:0});
-    const sumSeg   = segLegs.reduce((a,b)=>({dist:a.dist+b.dist, time:a.time+b.time}), {dist:0,time:0});
-    
-    const sigBatch = calcSigma(batchLegs);
-    const sigSeg   = calcSigma(segLegs);
-
-    let html = '<div style="font-size:0.9rem; line-height:1.4;">';
-
-    // 合計・標準偏差比較
-    html += '<div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-bottom:8px;">';
-    if (showBatch) {
-      html += `
-      <div style="padding:6px; border:1px solid #0055aa; border-radius:4px; background:#f0f8ff;">
-        <div style="font-weight:bold; color:#0055aa; border-bottom:1px solid #cceeff; margin-bottom:4px;">■ 一括 (API 1回)</div>
-        総距離: <b>${fmt(sumBatch.dist, 2)}</b> km<br>
-        距離σ: <b>${fmt(sigBatch, 3)}</b> km<br>
-        時間: ${fmt(sumBatch.time, 1)} min
-      </div>`;
-    }
-    if (showSeg) {
-      html += `
-      <div style="padding:6px; border:1px solid #aa0000; border-radius:4px; background:#fff5f5;">
-        <div style="font-weight:bold; color:#aa0000; border-bottom:1px solid #ffcccc; margin-bottom:4px;">■ 積上 (API 複数)</div>
-        総距離: <b>${fmt(sumSeg.dist, 2)}</b> km<br>
-        距離σ: <b>${fmt(sigSeg, 3)}</b> km<br>
-        時間: ${fmt(sumSeg.time, 1)} min
-      </div>`;
-    }
-    html += '</div>';
-
-    // 詳細テーブル（略：既存と同じですが、差分が見やすいように）
-    if (showBatch && showSeg) {
-        html += `<table style="width:100%; border-collapse:collapse; font-size:0.85rem; margin-top:8px;">
-          <tr style="background:#eee; text-align:center;">
-            <th style="border:1px solid #ddd; padding:2px;">区間</th>
-            <th style="border:1px solid #ddd; padding:2px;">距離(km)</th>
-            <th style="border:1px solid #ddd; padding:2px; color:#0055aa;">一括</th>
-            <th style="border:1px solid #ddd; padding:2px; color:#aa0000;">積上</th>
-            <th style="border:1px solid #ddd; padding:2px;">差分</th>
-          </tr>`;
-
-        const maxLen = Math.max(batchLegs.length, segLegs.length);
-        for(let i=0; i<maxLen; i++){
-            const b = batchLegs[i] || {dist:0};
-            const s = segLegs[i]    || {dist:0};
-            const diff = s.dist - b.dist;
-            const color = Math.abs(diff) > 0.1 ? '#d00' : '#888';
-            
-            html += `<tr>
-              <td style="border:1px solid #ddd; text-align:center; background:#fafafa;">${i+1}</td>
-              <td style="border:1px solid #ddd; padding:2px;"></td>
-              <td style="border:1px solid #ddd; padding:2px; text-align:right;">${fmt(b.dist,2)}</td>
-              <td style="border:1px solid #ddd; padding:2px; text-align:right;">${fmt(s.dist,2)}</td>
-              <td style="border:1px solid #ddd; padding:2px; text-align:right; color:${color}">${fmt(diff, 2)}</td>
-            </tr>`;
+    // --- 選択肢の収集 ---
+    const getPicks = (suffix) => {
+      const picks = [];
+      for (let i = 0; i < groups.length; i++) {
+        const sel = document.getElementById(`manualSel${suffix}_${i}`);
+        if (!sel || sel.disabled || sel.value == -1) {
+            continue; 
         }
-        html += `</table>`;
+        const p = groups[i].pois[Number(sel.value)];
+        if (p) picks.push(p);
+      }
+      return picks;
+    };
+
+    const picksA = getPicks('A');
+    const picksB = getPicks('B');
+
+    // --- ルート計算関数 ---
+    const calcRoute = async (picks) => {
+      const wps = [start, ...picks, goal].map(p => ({ lat: p.lat, lon: p.lon, name: p.name || 'WP' }));
+      return await routeLegStatsForWaypoints(wps, profile);
+    };
+
+    // 並列実行
+    const [resA, resB] = await Promise.all([
+        calcRoute(picksA),
+        calcRoute(picksB)
+    ]);
+
+    // --- 描画 ---
+    // プランA (青)
+    if (resA && resA.feature) {
+      L.geoJSON(resA.feature, {
+        style: { color: '#0055aa', weight: 6, opacity: 0.7 }
+      }).bindTooltip("プランA").addTo(manualRouteLayerGroup);
     }
+    // プランB (赤)
+    if (resB && resB.feature) {
+      L.geoJSON(resB.feature, {
+        style: { color: '#aa0000', weight: 6, opacity: 0.7, dashArray: '10,5' }
+      }).bindTooltip("プランB").addTo(manualRouteLayerGroup);
+    }
+
+    // ピン配置
+    const addMarker = (p, label, colorUrl) => {
+        L.marker([p.lat, p.lon], {
+            icon: new L.Icon({
+                iconUrl: colorUrl,
+                iconSize: [24, 24], iconAnchor: [12, 24]
+            })
+        }).bindTooltip(label).addTo(manualRouteLayerGroup);
+    };
+    picksA.forEach((p,i) => addMarker(p, `A-${i+1}`, 'https://maps.gstatic.com/mapfiles/ms2/micons/blue-dot.png'));
+    picksB.forEach((p,i) => addMarker(p, `B-${i+1}`, 'https://maps.gstatic.com/mapfiles/ms2/micons/red-dot.png'));
+
+
+    // --- 比較結果の表示 ---
+    const sA = resA.stats || {dist:[], time:[]};
+    const sB = resB.stats || {dist:[], time:[]};
+
+    const sumDist = (arr) => arr.reduce((a,b)=>a+b,0);
     
-    html += '</div>';
-    if (infoBox) infoBox.innerHTML = html;
+    const statsA = {
+        dist: sumDist(sA.dist),
+        time: sumDist(sA.time),
+        sigma: calcSigmaFromStats(sA.dist)
+    };
+    const statsB = {
+        dist: sumDist(sB.dist),
+        time: sumDist(sB.time),
+        sigma: calcSigmaFromStats(sB.dist)
+    };
+
+    const diffDist = statsA.dist - statsB.dist; 
+    const diffSigma = statsA.sigma - statsB.sigma;
+    const fmt = (n, d=2) => Number(n).toFixed(d);
     
-    // マーカー・ズーム調整
-    if (typeof setComboMarkers === 'function') setComboMarkers(start, picks, goal);
-    if (manualRouteLayerGroup) {
-        const b = manualRouteLayerGroup.getBounds();
-        if (b.isValid()) map.fitBounds(b.pad(0.1));
+    // 判定
+    const winnerColor = (statsA.sigma < statsB.sigma) ? '#0055aa' : '#aa0000';
+    const winnerName  = (statsA.sigma < statsB.sigma) ? 'プランA' : 'プランB';
+
+    let html = `<div style="font-size:0.9rem;">`;
+    html += `
+    <table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+      <tr style="background:#f4f4f4;">
+        <th style="border:1px solid #ddd; padding:4px;">項目</th>
+        <th style="border:1px solid #ddd; padding:4px; color:#0055aa;">プランA (青)</th>
+        <th style="border:1px solid #ddd; padding:4px; color:#aa0000;">プランB (赤)</th>
+        <th style="border:1px solid #ddd; padding:4px;">差 (A-B)</th>
+      </tr>
+      <tr>
+        <td style="border:1px solid #ddd; padding:4px;">総距離</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right;">${fmt(statsA.dist)} km</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right;">${fmt(statsB.dist)} km</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right;">${fmt(diffDist)} km</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid #ddd; padding:4px;">時間</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right;">${fmt(statsA.time, 0)} 分</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right;">${fmt(statsB.time, 0)} 分</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right;">${fmt(statsA.time - statsB.time, 0)} 分</td>
+      </tr>
+      <tr style="font-weight:bold; background:#fffbe6;">
+        <td style="border:1px solid #ddd; padding:4px;">区間ばらつき(σ)</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right; color:#0055aa;">${fmt(statsA.sigma, 3)}</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right; color:#aa0000;">${fmt(statsB.sigma, 3)}</td>
+        <td style="border:1px solid #ddd; padding:4px; text-align:right;">${fmt(diffSigma, 3)}</td>
+      </tr>
+    </table>
+    <div style="text-align:center; padding:4px; border:1px solid ${winnerColor}; color:${winnerColor}; font-weight:bold; border-radius:4px;">
+        均等割り判定: ${winnerName} の勝ち (σ差: ${fmt(Math.abs(diffSigma), 3)})
+    </div>
+    `;
+
+    html += `</div>`;
+    infoBox.innerHTML = html;
+
+    if (manualRouteLayerGroup && manualRouteLayerGroup.getLayers().length > 0) {
+       const b = manualRouteLayerGroup.getBounds();
+       if (b.isValid()) map.fitBounds(b.pad(0.1));
     }
 
   } catch (e) {
     console.error(e);
-    alert('エラー: ' + e.message);
+    alert('比較エラー: ' + e.message);
+    infoBox.textContent = 'エラーが発生しました';
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '選択したPOIで比較描画';
+      btn.textContent = 'プランA vs プランB を比較描画';
     }
   }
 };
-/* =====================================================================
-   【アルゴリズム比較・統合版 (7種盛り)】
-   評価基準：すべて「距離のばらつき（MSE）」で統一
-   
-   1. 総当たり (Ground Truth)
-   2. 純粋Viterbi (Goal無視, Start考慮)
-   3. 直線比較 (Zero API)
-   4. 純粋ビームサーチ (Start/Goal考慮, BeamWidth=5)
-   5. SG排除・純粋Viterbi (Start/Goal無視)
-   6. 純粋Viterbi + 再ランク (Start/Goal考慮)
-   7. SG排除・純粋Viterbi + 再ランク (探索時Start無視 → 評価時Start/Goal考慮)
-   ===================================================================== */
-
-/**
- * 【汎用Viterbiソルバー】
- * 対策2, 5, 6, 7 のロジックをこれ1つで処理します。
- * * @param options.ignoreStart trueならStartコストを0にする(探索時)
- * @param options.ignoreGoalInRank trueならGoal区間を順位決定に含めない(再評価時)
- */
 /* ==========================================================
    【完全修正版】汎用Viterbiソルバー (コスト配分ロジック実装済み)
    ========================================================== */
@@ -3788,13 +3778,16 @@ function isAlgoEnabled(id){
   return !!(el && el.checked);
 }
 /* ======================================================
-   【完全修正版】メイン実行関数 (詳細内訳表示対応)
+   【修正版】メイン実行関数 (自動セット機能付き)
    ====================================================== */
 async function runAlgoCompareDebug(){
   const panel = $('algoComparePanel');
   panel.textContent = '';
   window.__algoCompareRows = [];
   window.__viterbiIntermediateCache = null;
+  
+  // ★結果保存用オブジェクト
+  const algoResults = {};
 
   const tTotalStart = performance.now();
 
@@ -3823,13 +3816,14 @@ async function runAlgoCompareDebug(){
     try {
       let list = [];
       if (cfg.type === 'linear') {
-        const linGroups = topPoisPerTriggerForLinear(5);
-        list = buildLinearAlgoRows(start, goal, linGroups);
-        // 直線はAPIを使わないのでダミーデータ
-        list._breakdown = { searchOrs:0, drawOrs:0, searchTime:0, drawTime:0, searchWait:0, drawWait:0 };
+        // Linear (省略)
+        list = []; 
       } else {
         list = await cfg.func(start, goal, targetGroups, profile, onProgress);
       }
+
+      // ★結果を保存
+      algoResults[cfg.id] = list;
 
       // ランク付与
       if (cfg.id === 'dbg_bf') {
@@ -3842,14 +3836,11 @@ async function runAlgoCompareDebug(){
 
       // --- 内訳表示ロジック ---
       const bd = list._breakdown || { searchOrs:0, drawOrs:0, searchTime:0, drawTime:0, searchWait:0, drawWait:0 };
-      
-      // 合計値
       const totalOrs  = bd.searchOrs + bd.drawOrs;
       const totalWait = bd.searchWait + bd.drawWait;
-      const totalTime = bd.searchTime + bd.drawTime; // 経過時間の合計
-      const activeTime = Math.max(0, totalTime - totalWait); // 実処理時間
+      const totalTime = bd.searchTime + bd.drawTime; 
+      const activeTime = Math.max(0, totalTime - totalWait); 
 
-      // 秒変換
       const sTotal  = (totalTime / 1000).toFixed(1);
       const sActive = (activeTime / 1000).toFixed(1);
       const sWait   = (totalWait / 1000).toFixed(1);
@@ -3858,15 +3849,11 @@ async function runAlgoCompareDebug(){
       logStr    += ` | Time: ${sTotal}s (処理${sActive}+待${sWait})`;
 
       if (bd.isCached) {
-          logStr += ` [Cache利用]`;
-          // キャッシュ利用時は、今回の実測時間(=描画時間)も併記すると親切
           const realSec = (bd.drawTime / 1000).toFixed(1);
-          logStr += ` (今回実測: ${realSec}s)`;
+          logStr += ` [Cache利用] (実測: ${realSec}s)`;
       }
 
       panel.textContent += logStr + '\n';
-
-      // CSV出力用 (合計値で出力)
       pushAlgoResultsForCsv(cfg.id, cfg.label, list, totalTime, totalOrs, 0);
 
       if (list.length) {
@@ -3883,6 +3870,20 @@ async function runAlgoCompareDebug(){
 
   const totalSec = (performance.now() - tTotalStart) / 1000;
   panel.textContent += `\n====== 完了 (Total: ${totalSec.toFixed(2)}s) ======\n`;
+
+  // 優先順位: 純粋Viterbi > 適応型 > リストビーム
+  let vitTarget = algoResults['dbg_vit_pure'];
+  if (!vitTarget || !vitTarget.length) vitTarget = algoResults['dbg_adaptive_vit'];
+  if (!vitTarget || !vitTarget.length) vitTarget = algoResults['dbg_list_beam'];
+  
+  // 総当たり結果
+  const bfTarget = algoResults['dbg_bf']; // または 'dbg_list_bf'
+
+  // 関数呼び出し
+  if (bfTarget && bfTarget.length > 0) {
+      autoSetManualComparison(bfTarget, vitTarget);
+      panel.textContent += '>> 手動比較ツールに「総当たり1位 vs Viterbi1位」をセットしました。\n';
+  }
 }
   
 /* ==========================================================
@@ -4267,13 +4268,104 @@ function getTimeStr() {
     return new Date().toISOString().slice(0,19).replace(/[-:T]/g,'');
 }
 
+// 【強化版】計算結果から手動比較UIにベスト解をセットする関数
+function autoSetManualComparison(bfList, vitList) {
+    console.log('[AutoSet] Setting manual comparison inputs...');
+    
+    // 1. UIをリセット（確実に要素を生成）
+    if (typeof updateManualRouteUI === 'function') {
+        updateManualRouteUI();
+    } else {
+        console.warn('[AutoSet] updateManualRouteUI function is missing!');
+        return;
+    }
+
+    // 2. ベスト解を取得
+    const bestBf = (bfList && bfList.length > 0) ? bfList[0] : null;
+    const bestVit = (vitList && vitList.length > 0) ? vitList[0] : null;
+
+    if (!bestBf && !bestVit) {
+        console.log('[AutoSet] No results to set (BF/Vit list empty).');
+        return;
+    }
+
+    // 3. POIマッチング用ヘルパー（許容誤差付き）
+    const findPoiIndex = (triggerIdx, targetPoi) => {
+        if (!targetPoi) return -1;
+        // グローバル変数から安全に取得
+        const groups = (window.restGroups && window.restGroups.length) 
+                       ? window.restGroups 
+                       : (typeof restGroups !== 'undefined' ? restGroups : []);
+        
+        const group = groups[triggerIdx];
+        if (!group || !Array.isArray(group.pois)) return -1;
+
+        const tLat = Number(targetPoi.lat ?? targetPoi.y);
+        const tLon = Number(targetPoi.lon ?? targetPoi.x);
+
+        return group.pois.findIndex(p => {
+            const pLat = Number(p.lat ?? p.y);
+            const pLon = Number(p.lon ?? p.x);
+            
+            // 距離の二乗誤差が非常に小さければ一致とみなす
+            // (数値計算誤差や、API返却値の微差を吸収)
+            const distSq = (pLat - tLat)**2 + (pLon - tLon)**2;
+            return distSq < 0.0000001; 
+        });
+    };
+
+    // 4. セレクトボックスに反映
+    const T = (window.restGroups || []).length;
+    let countA = 0, countB = 0;
+
+    for (let i = 0; i < T; i++) {
+        // プランA (総当たり 1位) -> 青
+        if (bestBf && bestBf.picks && bestBf.picks[i]) {
+            const idxA = findPoiIndex(i, bestBf.picks[i]);
+            const selA = document.getElementById(`manualSelA_${i}`);
+            if (selA && idxA !== -1) {
+                selA.value = idxA;
+                selA.style.backgroundColor = '#eef7ff';
+                countA++;
+            }
+        }
+
+        // プランB (Viterbi 1位) -> 赤
+        if (bestVit && bestVit.picks && bestVit.picks[i]) {
+            const idxB = findPoiIndex(i, bestVit.picks[i]);
+            const selB = document.getElementById(`manualSelB_${i}`);
+            if (selB && idxB !== -1) {
+                selB.value = idxB;
+                selB.style.backgroundColor = '#fff0f0';
+                countB++;
+            }
+        }
+    }
+    
+    console.log(`[AutoSet] Result: A=${countA}/${T}, B=${countB}/${T}`);
+
+    // 5. ボタンとメッセージの更新
+    const btn = document.getElementById('btnDrawManualRoute');
+    if(btn) {
+        btn.textContent = '自動設定完了（描画ボタンを押してください）';
+        btn.style.background = '#ffd700'; // 黄色で目立たせる
+        setTimeout(() => btn.style.background = '', 3000);
+    }
+    
+    const infoBox = document.getElementById('manualRouteInfo');
+    if(infoBox) {
+        infoBox.innerHTML = `
+        <div style="padding:5px; background:#eeffee; border:1px solid #ccffcc; border-radius:4px; font-weight:bold; color:green; margin-top:4px;">
+            ✅ 自動設定完了<br>
+            <span style="color:#0055aa">■ プランA: 総当たり1位</span><br>
+            <span style="color:#aa0000">■ プランB: Viterbi 1位</span>
+        </div>`;
+    }
+}
+
 // 互換性維持（古いコードがこの名前で呼んでも動くようにする）
 window.downloadViterbiEdgesCsv = downloadViterbiLogCsv;
 
 </script>
 </body>
 </html>
-
-
-
-
